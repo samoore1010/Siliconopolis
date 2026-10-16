@@ -23,6 +23,20 @@ app = FastAPI(title="Etsy Agent Pipeline", version=__version__)
 _PKCE: dict[str, str] = {}
 
 
+@app.get("/", response_class=HTMLResponse)
+def index():
+    return HTMLResponse(
+        "<html><head><title>Etsy Agent Pipeline</title></head>"
+        "<body style='font-family:system-ui;max-width:40rem;margin:4rem auto;line-height:1.6'>"
+        f"<h1>Etsy Agent Pipeline</h1><p>Environment: <b>{html.escape(settings.app_env)}</b> &middot; "
+        f"mode: <b>{html.escape(settings.mode)}</b> &middot; dry run: <b>{settings.dry_run}</b> &middot; v{__version__}</p>"
+        "<ul><li><a href='/status'>/status</a> — counts by state, recent runs, spend</li>"
+        "<li><a href='/health'>/health</a> — liveness check used by Railway</li>"
+        "<li><a href='/oauth/etsy/start'>/oauth/etsy/start</a> — begin the Etsy OAuth flow (live mode)</li></ul>"
+        "<p>Agents run as Railway cron services; this page only reports state.</p></body></html>"
+    )
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "version": __version__, "app_env": settings.app_env, "mode": settings.mode}
