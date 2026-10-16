@@ -6,7 +6,7 @@ One Railway project, two environments (`staging`, `production`). Each environmen
 |---|---|---|
 | `postgres` | Railway Postgres | queue, state, runs, OAuth tokens |
 | `storage` | Railway Bucket (S3-compatible) | product files + listing images |
-| `web` | web service | `python -m pipeline web`; **pre-deploy** `alembic upgrade head` (= the `migrate` step) |
+| `web` | web service | image default (`python -m pipeline migrate && python -m pipeline web`); IaC also sets **pre-deploy** `alembic upgrade head` |
 | `researcher` | cron | `python -m pipeline run researcher` — `0 13 * * 1` (Mon 6:00 AM Phoenix) |
 | `daily-pipeline` | cron | `python -m pipeline run daily` — `0 14 * * *` (7:00 AM Phoenix) |
 | `analyst` | cron | `python -m pipeline run analyst` — `0 3 * * 1` (Sun 8:00 PM Phoenix) |
@@ -21,6 +21,15 @@ make overlapping or manual "run now" executions safe anyway.
 > **Infrastructure as Code** in [`.railway/railway.ts`](.railway/railway.ts), which declares every
 > service, cron schedule, pre-deploy command, Postgres, bucket and variable wiring. If you prefer
 > clicking, Section B below lists the equivalent dashboard settings.
+
+## Already have a single service from the dashboard?
+
+If you created the project by pointing Railway at the repo (one service, no database), you have the
+web service only. It serves `/` and `/health`, but agents cannot run and nothing persists:
+`APP_ENV=local` with SQLite is wiped on every redeploy. To finish the setup, either run Section A
+(IaC adds Postgres, the bucket and the three cron services next to your existing service — rename
+the existing service to `web` first so the plan updates it instead of creating a second one) or
+follow Section B steps 2–7 in the dashboard. Then set `APP_ENV=staging` or `production`.
 
 ## Prerequisites
 
