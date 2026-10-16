@@ -1,0 +1,27 @@
+# Seed niches. TODO(owner): replace these three placeholders with real niches before go-live.
+# Each niche: name, product_types (wall_art | planner | tracker | spreadsheet), search keywords the
+# Researcher uses as demand signals, and optional notes/constraints.
+niches:
+  - name: minimalist botanical wall art          # PLACEHOLDER
+    product_types: [wall_art]
+    keywords:
+      - minimalist botanical print
+      - line art plant printable
+      - neutral wall art digital download
+    notes: Original line-drawn plants only. No photographs of real artworks, no artist names.
+
+  - name: ADHD-friendly daily planners           # PLACEHOLDER
+    product_types: [planner, tracker]
+    keywords:
+      - adhd daily planner printable
+      - simple daily planner pdf
+      - habit tracker printable minimalist
+    notes: Low-clutter layouts, one clear focus per page. Avoid medical claims.
+
+  - name: small-business bookkeeping spreadsheets   # PLACEHOLDER
+    product_types: [spreadsheet]
+    keywords:
+      - small business bookkeeping spreadsheet
+      - income expense tracker excel
+      - etsy seller bookkeeping template
+    notes: Generic templates with formulas; no tax advice; US-agnostic.
