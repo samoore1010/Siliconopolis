@@ -116,6 +116,8 @@ production.
 | `S3_*` | bucket references | same | see Section B.6 |
 | `MODEL_RESEARCH` / `MODEL_WORKER` / `MODEL_CHEAP` | `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-haiku-5-5` | same | |
 | `IMAGE_PROVIDER` | `mock` | provider name | only `mock` implemented today |
+| `VILLAGE_USER`, `VILLAGE_PASSWORD` | ✔ | ✔ | basic auth for the dashboard; without them the village returns 503 off-local |
+| `RAILWAY_API_TOKEN`, `RAILWAY_SERVICE_IDS` | optional | optional | enables "Run now" buttons (Section H) |
 | `LOG_FORMAT` | `json` | `json` | Railway log explorer parses JSON lines |
 | **secrets** | | | never in the repo |
 | `ANTHROPIC_API_KEY` | ✔ | ✔ | |
@@ -153,9 +155,28 @@ Moving between stages is a variable change only; run `python -m pipeline smoke` 
 
 ## G. Operations
 
+- **Village**: open `https://<web-domain>/` (redirects to `/village`), sign in with
+  `VILLAGE_USER`/`VILLAGE_PASSWORD`. Everything shown is read from Postgres; it polls every 4s.
+- **Demo on staging**: in the `web` service shell run `python -m pipeline demo --cycles 2` while
+  watching the village. Refuses when `APP_ENV=production` or any adapter is live.
+
 - **Logs**: each service's Logs tab; filter by `"agent":"qa"` or `"run_id":123`.
 - **Run now**: service → Deployments → ⋯ → *Run now* (or `railway cron run`). Safe at any time.
 - **Caps hit**: the run exits `3` and logs `CAP REACHED`; the `runs` row has `status=cap_reached`.
 - **Stuck rows**: a crashed run leaves `locked_by` set; locks older than `LOCK_TIMEOUT_MINUTES`
   (120) are reclaimed automatically. `status` shows `locked rows`.
 - **Rollback**: redeploy a previous deployment; migrations are additive (downgrade exists for 0001).
+
+## H. Optional "Run now" buttons
+
+Each agent panel has a Run-now button that asks Railway to re-run the agent's cron service. It is
+disabled until the `web` service has:
+
+- `RAILWAY_API_TOKEN` — a Railway project or account token with access to this project.
+- `RAILWAY_SERVICE_IDS` — JSON mapping `{"researcher": "<serviceId>", "daily": "<serviceId>", "analyst": "<serviceId>"}`
+  (Creator, QA and Lister all map to `daily`). Service ids are in each service's Settings page.
+- `RAILWAY_ENVIRONMENT_ID` — injected by Railway automatically.
+
+The button only starts a normal run, so caps, locks and the draft-only rule apply exactly as on a
+schedule. The GraphQL mutation used (`serviceInstanceRedeploy`) is marked `TODO(owner)` to verify
+against Railway's current API before relying on it.

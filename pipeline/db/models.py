@@ -124,3 +124,19 @@ class OAuthToken(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
+
+
+class Event(Base):
+    """Append-only activity log used to animate the village UI (run start/end, transitions, caps, errors)."""
+
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
+    agent: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    product_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    from_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    to_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="transition")
+    message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)

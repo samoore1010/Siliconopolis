@@ -17,8 +17,22 @@ Agents talk only through the `products` table (a queue keyed by `state`). Every 
 independent process that claims rows with a compare-and-swap lock, does its work, records a `runs`
 row (counts, errors, token/image cost) and exits — which is exactly what Railway cron services need.
 
-Spec: [`etsy-agent-pipeline-instructions_1.md`](etsy-agent-pipeline-instructions_1.md).
-Deployment: [`DEPLOY.md`](DEPLOY.md).
+Spec: [`etsy-agent-pipeline-instructions_1.md`](etsy-agent-pipeline-instructions_1.md) and the
+village UI addendum [`village-addendum.md`](village-addendum.md). Deployment: [`DEPLOY.md`](DEPLOY.md).
+
+## The village (dashboard)
+
+`/village` (the root URL redirects there) is a live isometric pixel office rendered from real
+database state: five desks with a character per agent, the Brain (the `products` queue) in the
+middle, a conveyor path, an Etsy outbox for drafts waiting on you, a reject bin, and a sidebar with
+spend/draft/brief meters and a live event feed. Characters show **working / idle / sleeping /
+needs you / cap reached / error / stale lock**, derived from the `runs`, `products` and `events`
+tables (`pipeline/web/village_state.py`). Click a desk, the Brain, the outbox, the bin or a feed
+item for details. Protected by HTTP basic auth (`VILLAGE_USER` / `VILLAGE_PASSWORD`); `/health`
+stays public. Art is original and procedural: see `pipeline/web/static/ASSETS.md`.
+
+To watch it move locally: `python -m pipeline web` in one terminal, `python -m pipeline demo` in
+another (mock mode only; refuses to run in production).
 
 ## Status
 
@@ -29,6 +43,7 @@ Deployment: [`DEPLOY.md`](DEPLOY.md).
 | 2.5 — Railway staging (Dockerfile, IaC, S3 storage, `smoke`) | code done; deploy per `DEPLOY.md` |
 | 3 — Live-ready (live Etsy adapter, OAuth helper + token table, `DRY_RUN`) | Etsy live client + OAuth + token table built, **unverified against live API**; image provider: mock only |
 | 4 — Printify / POD | interface + mock only |
+| 5 — Village UI (events table, authenticated API, `/village` scene, `demo`) | done |
 
 Everything external is behind an adapter with a mock implementation. Without `ANTHROPIC_API_KEY`
 the LLM is mocked too, so `python -m pipeline run-all` works on a fresh clone with no credentials.
@@ -59,7 +74,8 @@ images to `storage/products/<id>-<slug>/`.
 | `python -m pipeline run-all` | all five in order | worst |
 | `python -m pipeline status [--json]` | counts by state, recent runs, spend | 0 |
 | `python -m pipeline smoke [--json]` | DB, storage, Anthropic, Etsy, Printify (live only), image provider | 0 pass / 1 fail |
-| `python -m pipeline web` | FastAPI: `/health`, `/status`, `/oauth/etsy/start`, `/oauth/etsy/callback` | — |
+| `python -m pipeline web` | village dashboard at `/village`, `/api/village/*`, `/status`, `/health`, Etsy OAuth routes | — |
+| `python -m pipeline demo [--cycles N --sleep S --reset]` | mock-only loop that animates the village; refuses in production | 0 / 2 refused |
 | `python -m pipeline migrate` | `alembic upgrade head` | 0 |
 | `--dry-run` (global flag) | live reads, no external writes | — |
 
@@ -81,6 +97,8 @@ See [`.env.example`](.env.example) for the full list. Key ones:
 | `MODEL_RESEARCH` / `MODEL_WORKER` / `MODEL_CHEAP` | Claude models per role |
 | `LLM_PROVIDER` | `anthropic` or `mock`; defaults to anthropic when a key is set |
 | `DAILY_DRAFT_CAP`, `WEEKLY_BRIEF_CAP`, `MAX_DAILY_SPEND_USD` | hard caps; hitting one stops the run (exit 3) |
+| `VILLAGE_USER`, `VILLAGE_PASSWORD` | basic auth for the dashboard, status and OAuth start routes (required off-local) |
+| `RAILWAY_API_TOKEN`, `RAILWAY_SERVICE_IDS` | optional: enable the per-agent "Run now" buttons |
 
 Other config files: `niches.yaml` (seeded with three placeholder niches), `blocklist.txt` (IP safety
 terms), `prompts/*.md` (one prompt per agent, editable without code changes).
@@ -121,7 +139,7 @@ pipeline/
   generators/          pdf (reportlab), xlsx (openpyxl), mockups (Pillow)
   guardrails/          blocklist, caps
   commands/            status, smoke
-  web/                 FastAPI app
+  web/                 FastAPI app, basic auth, village API + state derivation, static village page
 alembic/               migrations
 prompts/               agent prompts
 scripts/etsy_oauth.py  one-time OAuth PKCE helper

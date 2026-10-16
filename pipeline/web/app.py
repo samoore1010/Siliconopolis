@@ -1,60 +1,74 @@
-"""Optional web service: /health, /status (JSON + HTML) and the Etsy OAuth callback."""
+"""Web service: village dashboard (auth), /status (auth), /health (public), Etsy OAuth routes."""
 
 from __future__ import annotations
 
-import html
 import json
+from pathlib import Path
 
-from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi import Depends, FastAPI, Query, Request
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
+from fastapi.staticfiles import StaticFiles
 
 from pipeline import __version__
 from pipeline.commands.status import collect_status, format_status
 from pipeline.config import get_settings
 from pipeline.logging_setup import configure_logging, get_logger
+from pipeline.web.auth import require_viewer
+from pipeline.web.village_api import router as village_router
 
 settings = get_settings()
 configure_logging(settings.log_level, settings.log_format)
 log = get_logger("pipeline.web")
 
-app = FastAPI(title="Etsy Agent Pipeline", version=__version__)
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+app = FastAPI(title="Siliconopolis — Etsy Agent Pipeline", version=__version__)
+app.include_router(village_router)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # In-memory PKCE verifier store for the OAuth helper flow (single owner; fine for v1).
 _PKCE: dict[str, str] = {}
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", include_in_schema=False)
 def index():
-    return HTMLResponse(
-        "<html><head><title>Etsy Agent Pipeline</title></head>"
-        "<body style='font-family:system-ui;max-width:40rem;margin:4rem auto;line-height:1.6'>"
-        f"<h1>Etsy Agent Pipeline</h1><p>Environment: <b>{html.escape(settings.app_env)}</b> &middot; "
-        f"mode: <b>{html.escape(settings.mode)}</b> &middot; dry run: <b>{settings.dry_run}</b> &middot; v{__version__}</p>"
-        "<ul><li><a href='/status'>/status</a> — counts by state, recent runs, spend</li>"
-        "<li><a href='/health'>/health</a> — liveness check used by Railway</li>"
-        "<li><a href='/oauth/etsy/start'>/oauth/etsy/start</a> — begin the Etsy OAuth flow (live mode)</li></ul>"
-        "<p>Agents run as Railway cron services; this page only reports state.</p></body></html>"
-    )
+    return RedirectResponse(url="/village", status_code=307)
+
+
+@app.get("/village", response_class=HTMLResponse, dependencies=[Depends(require_viewer)])
+def village():
+    return FileResponse(STATIC_DIR / "village.html", media_type="text/html")
 
 
 @app.get("/health")
 def health():
+    """Public liveness check for Railway. Exposes no secrets."""
     return {"ok": True, "version": __version__, "app_env": settings.app_env, "mode": settings.mode}
 
 
-@app.get("/status")
-def status(request: Request):
+@app.get("/status", dependencies=[Depends(require_viewer)])
+def status_route(request: Request):
     data = collect_status()
-    if "text/html" in request.headers.get("accept", "") and "application/json" not in request.headers.get("accept", ""):
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept and "application/json" not in accept:
+        import html
+
         body = html.escape(format_status(data))
-        return HTMLResponse(f"<html><head><title>Etsy Agent Pipeline</title></head><body style='font-family:monospace;white-space:pre;padding:2rem'>"
-                            f"<h2>Etsy Agent Pipeline — {settings.app_env} / {settings.mode}</h2>{body}</body></html>")
+        return HTMLResponse("<html><head><title>Status — Siliconopolis</title></head><body style='font-family:monospace;"
+                            "white-space:pre;padding:2rem;background:#0f1115;color:#e6e6e6'>"
+                            f"<a href='/village' style='color:#8ab4f8'>← village</a>\n\n{body}</body></html>")
     return JSONResponse(data)
 
 
-@app.get("/oauth/etsy/start")
+@app.get("/oauth/etsy/start", dependencies=[Depends(require_viewer)])
 def oauth_start(state: str = Query("pipeline")):
-    """Convenience: build the Etsy authorize URL (same logic as scripts/etsy_oauth.py)."""
+    """Build the Etsy authorize URL (same logic as scripts/etsy_oauth.py)."""
     from scripts.etsy_oauth import build_authorize_url
 
     url, verifier = build_authorize_url(settings.etsy_api_key, settings.etsy_redirect_uri, state)
@@ -64,6 +78,7 @@ def oauth_start(state: str = Query("pipeline")):
 
 @app.get("/oauth/etsy/callback", response_class=PlainTextResponse)
 def oauth_callback(code: str = Query(...), state: str = Query("pipeline")):
+    """Etsy redirects the owner's browser here; it only works for a state started via /oauth/etsy/start."""
     from scripts.etsy_oauth import exchange_code
 
     verifier = _PKCE.pop(state, None)

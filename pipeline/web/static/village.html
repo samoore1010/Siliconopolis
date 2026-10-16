@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Siliconopolis — Agent Village</title>
+<link rel="stylesheet" href="/static/village.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo"></span> Siliconopolis <span class="sub">agent village</span></div>
+  <div class="badges" id="badges"></div>
+  <nav><a href="/status">status</a><a href="/health">health</a></nav>
+</header>
+
+<main class="layout">
+  <section class="scene-wrap">
+    <canvas id="scene" width="960" height="620" aria-label="Isometric office showing the five pipeline agents"></canvas>
+    <div class="legend" id="legend"></div>
+    <div class="hint" id="hint">loading…</div>
+  </section>
+
+  <aside class="sidebar">
+    <div class="card">
+      <h3>Today</h3>
+      <div class="meter"><div class="meter-label"><span>Spend</span><span id="spend-label">–</span></div><div class="bar"><div id="spend-bar"></div></div></div>
+      <div class="meter"><div class="meter-label"><span>Drafts</span><span id="draft-label">–</span></div><div class="bar"><div id="draft-bar"></div></div></div>
+      <div class="meter"><div class="meter-label"><span>Briefs this week</span><span id="brief-label">–</span></div><div class="bar"><div id="brief-bar"></div></div></div>
+    </div>
+    <div class="card">
+      <h3>Queue <small>(the Brain)</small></h3>
+      <div class="queue" id="queue"></div>
+    </div>
+    <div class="card feed-card">
+      <h3>Live feed</h3>
+      <ul class="feed" id="feed"></ul>
+    </div>
+  </aside>
+</main>
+
+<div class="panel hidden" id="panel">
+  <div class="panel-head"><h2 id="panel-title">—</h2><button id="panel-close" aria-label="Close">×</button></div>
+  <div class="panel-body" id="panel-body"></div>
+</div>
+<div class="scrim hidden" id="scrim"></div>
+
+<script src="/static/village.js"></script>
+</body>
+</html>

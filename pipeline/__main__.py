@@ -4,7 +4,8 @@
   python -m pipeline run-all            # researcher -> creator -> qa -> lister -> analyst
   python -m pipeline status
   python -m pipeline smoke
-  python -m pipeline web                # FastAPI /health /status + Etsy OAuth callback
+  python -m pipeline web                # village dashboard, /health, /status, Etsy OAuth callback
+  python -m pipeline demo               # mock-mode loop to watch the village animate
 
 Exit codes: 0 ok, 1 failure, 3 cap reached (so Railway cron shows failure/red when something is off).
 """
@@ -95,6 +96,16 @@ def cmd_web(args) -> int:
     return 0
 
 
+def cmd_demo(args) -> int:
+    from pipeline.commands.demo import DemoRefused, run_demo
+
+    try:
+        return run_demo(cycles=args.cycles, sleep_seconds=args.sleep, reset=args.reset)
+    except DemoRefused as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+
+
 def cmd_migrate(args) -> int:
     from alembic.config import Config
 
@@ -129,6 +140,12 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("web", help="start the optional web service")
     w.add_argument("--port", type=int, default=None)
     w.set_defaults(fn=cmd_web)
+
+    d = sub.add_parser("demo", help="mock-mode loop that animates the village (refuses in production)")
+    d.add_argument("--cycles", type=int, default=3)
+    d.add_argument("--sleep", type=float, default=4.0, help="seconds between agent runs")
+    d.add_argument("--reset", action="store_true", help="wipe products/runs/events first")
+    d.set_defaults(fn=cmd_demo)
 
     m = sub.add_parser("migrate", help="alembic upgrade head")
     m.set_defaults(fn=cmd_migrate)

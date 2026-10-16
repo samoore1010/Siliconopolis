@@ -19,6 +19,14 @@ def set_run_context(agent: str | None, run_id: int | None) -> None:
     _run_ctx.set(run_id)
 
 
+def current_agent() -> str | None:
+    return _agent_ctx.get()
+
+
+def current_run_id() -> int | None:
+    return _run_ctx.get()
+
+
 def redact(obj):
     """Recursively redact values whose key looks like a secret. Used before logging dicts."""
     if isinstance(obj, dict):

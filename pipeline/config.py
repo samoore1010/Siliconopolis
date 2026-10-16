@@ -81,8 +81,14 @@ class Settings(BaseSettings):
     blocklist_file: str = Field("blocklist.txt", alias="BLOCKLIST_FILE")
     prompts_dir: str = Field("prompts", alias="PROMPTS_DIR")
 
-    # web
+    # web / village
     port: int = Field(8000, alias="PORT")
+    village_user: str = Field("", alias="VILLAGE_USER")
+    village_password: str = Field("", alias="VILLAGE_PASSWORD")
+    # Optional "Run now": Railway API token + JSON map {"researcher": "<serviceId>", "daily": "...", "analyst": "..."}
+    railway_api_token: str = Field("", alias="RAILWAY_API_TOKEN")
+    railway_environment_id: str = Field("", alias="RAILWAY_ENVIRONMENT_ID")
+    railway_service_ids: str = Field("", alias="RAILWAY_SERVICE_IDS")
 
     # ------------------------------------------------------------------ validators
     @field_validator("database_url")
@@ -112,6 +118,14 @@ class Settings(BaseSettings):
         return self
 
     # ------------------------------------------------------------------ helpers
+    @property
+    def village_auth_configured(self) -> bool:
+        return bool(self.village_user and self.village_password)
+
+    @property
+    def run_now_enabled(self) -> bool:
+        return bool(self.railway_api_token and self.railway_service_ids)
+
     @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
