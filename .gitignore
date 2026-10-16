@@ -15,7 +15,7 @@ build/
 dist/
 
 # local runtime data
-storage/
+/storage/
 *.db
 *.sqlite
 *.sqlite3
