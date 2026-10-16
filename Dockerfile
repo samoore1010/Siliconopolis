@@ -22,6 +22,7 @@ COPY . .
 RUN useradd --create-home --uid 10001 app && mkdir -p /app/storage && chown -R app:app /app
 USER app
 
-# Default start command = web service. Cron services override with e.g.
-#   python -m pipeline run researcher
-CMD ["python", "-m", "pipeline", "web"]
+# Default start command = migrate, then web service. Running `alembic upgrade head` here means a
+# service created from the dashboard (no pre-deploy command configured) still gets its tables.
+# Cron services override the start command with e.g. `python -m pipeline run researcher`.
+CMD ["sh", "-c", "python -m pipeline migrate && python -m pipeline web"]
