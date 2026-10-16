@@ -1,0 +1,170 @@
+# One term per line. Case-insensitive, whole-word match. Lines starting with # are comments.
+# Checked against: image prompts, briefs, titles, tags, descriptions. QA rejects on any hit.
+# TODO(owner): extend with niche-specific brands, characters and artists before go-live.
+
+# --- brands / companies ---
+disney
+pixar
+marvel
+dc comics
+nintendo
+pokemon
+pokémon
+hello kitty
+sanrio
+lego
+barbie
+mattel
+hasbro
+nike
+adidas
+apple
+starbucks
+coca-cola
+coca cola
+pepsi
+netflix
+hbo
+warner bros
+universal studios
+paramount
+sesame street
+peppa pig
+paw patrol
+bluey
+cocomelon
+minecraft
+roblox
+fortnite
+taylor swift
+beyonce
+beyoncé
+harry potter
+hogwarts
+star wars
+jedi
+mandalorian
+baby yoda
+grogu
+stranger things
+game of thrones
+lord of the rings
+hobbit
+marvel comics
+spider-man
+spiderman
+batman
+superman
+wonder woman
+iron man
+avengers
+mickey mouse
+minnie mouse
+winnie the pooh
+frozen elsa
+elsa and anna
+moana
+encanto
+toy story
+cars lightning mcqueen
+lightning mcqueen
+mario
+luigi
+zelda
+kirby
+sonic the hedgehog
+pikachu
+snoopy
+peanuts
+garfield
+the simpsons
+simpsons
+rick and morty
+south park
+spongebob
+squidward
+patrick star
+dragon ball
+naruto
+one piece
+sailor moon
+totoro
+studio ghibli
+ghibli
+my little pony
+care bears
+transformers
+power rangers
+teenage mutant ninja turtles
+tmnt
+jurassic park
+jurassic world
+indiana jones
+james bond
+007
+mission impossible
+top gun
+barbenheimer
+grinch
+dr. seuss
+dr seuss
+cat in the hat
+lorax
+wednesday addams
+addams family
+beetlejuice
+nightmare before christmas
+jack skellington
+hocus pocus
+sanderson sisters
+yellowstone
+friends tv
+the office
+dunder mifflin
+schitt's creek
+ted lasso
+bridgerton
+euphoria
+squid game
+# --- sports leagues/teams ---
+nfl
+nba
+mlb
+nhl
+fifa
+premier league
+dallas cowboys
+los angeles lakers
+new york yankees
+# --- universities (trademarked) ---
+harvard
+yale
+stanford
+# --- living/real people & celebrities (never depict or name real people) ---
+elon musk
+kim kardashian
+oprah
+drake
+rihanna
+ariana grande
+billie eilish
+harry styles
+dolly parton
+morgan wallen
+zach bryan
+# --- named artists / styles (never "in the style of") ---
+banksy
+basquiat
+kaws
+yayoi kusama
+keith haring
+andy warhol
+takashi murakami
+hilma af klint
+frida kahlo
+# --- phrases ---
+in the style of
+inspired by disney
+fan art
+bootleg
+unofficial

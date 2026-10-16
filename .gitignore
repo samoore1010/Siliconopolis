@@ -1,0 +1,25 @@
+# secrets & local config
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# local runtime data
+storage/
+*.db
+*.sqlite
+*.sqlite3
+logs/
+
+# node (railway iac sdk)
+node_modules/
