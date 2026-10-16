@@ -66,6 +66,12 @@ export default defineRailway((ctx) => {
     PRINTIFY_API_TOKEN: preserve(),
     PRINTIFY_SHOP_ID: preserve(),
     IMAGE_API_KEY: preserve(),
+    // Village dashboard basic auth (required: the web URL is public).
+    VILLAGE_USER: preserve(),
+    VILLAGE_PASSWORD: preserve(),
+    // Optional Run-now buttons (see DEPLOY.md section H).
+    RAILWAY_API_TOKEN: preserve(),
+    RAILWAY_SERVICE_IDS: preserve(),
   };
 
   const source = github(REPO, { branch: BRANCH });

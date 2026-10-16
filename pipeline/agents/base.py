@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from pipeline.config import Settings, get_settings
 from pipeline.db import session_scope
+from pipeline.db.events import EventKind, prune_events, record_event
 from pipeline.db.models import Run, RunStatus
 from pipeline.guardrails.caps import CapReached, check_spend_cap
 from pipeline.llm import ImageInput, LLMClient, LLMResult, get_llm
@@ -57,7 +58,11 @@ class Agent:
             s.add(run)
             s.flush()
             self.run_id = run.id
-        set_run_context(self.name, self.run_id)
+            set_run_context(self.name, self.run_id)
+            record_event(s, kind=EventKind.RUN_STARTED, message=f"{self.name} run #{self.run_id} started")
+            pruned = prune_events(s)
+            if pruned:
+                self.log.info("pruned old events", count=pruned)
         self.log.info("run started", mode=self.settings.mode, dry_run=self.settings.dry_run,
                       app_env=self.settings.app_env, llm=self.llm.provider)
         status = RunStatus.SUCCESS
@@ -68,10 +73,12 @@ class Agent:
             status = RunStatus.CAP_REACHED
             self.errors.append(str(e))
             self.log.warning("CAP REACHED - stopping run", cap=e.cap, limit=e.limit, current=e.current)
+            self._event(EventKind.CAP_REACHED, str(e))
         except Exception as e:  # noqa: BLE001
             status = RunStatus.FAILED
             self.errors.append(f"{type(e).__name__}: {e}")
             self.log.error("run failed", error=str(e), trace=traceback.format_exc())
+            self._event(EventKind.ERROR, f"{type(e).__name__}: {e}")
         finally:
             with session_scope() as s:
                 run = s.get(Run, self.run_id)
@@ -82,6 +89,9 @@ class Agent:
                     run.errors_json = self.errors
                     run.cost_usd = round(self._run_cost, 6)
                     run.usage_json = self._usage
+                record_event(s, kind=EventKind.RUN_FINISHED, cost_usd=self._run_cost,
+                             message=f"{self.name} run #{self.run_id} {status}: {self.items_processed} items, "
+                                     f"${self._run_cost:.4f}, {len(self.errors)} errors")
             self.log.info("run finished", status=status, items=self.items_processed,
                           cost_usd=round(self._run_cost, 4), errors=len(self.errors))
             set_run_context(None, None)
@@ -118,3 +128,12 @@ class Agent:
     def note_error(self, msg: str, **fields: Any) -> None:
         self.errors.append(msg)
         self.log.error(msg, **fields)
+        self._event(EventKind.ERROR, msg, product_id=fields.get("product_id"))
+
+    def _event(self, kind: str, message: str, product_id: int | None = None) -> None:
+        """Write an event in its own transaction so it survives a rolled-back run."""
+        try:
+            with session_scope() as s:
+                record_event(s, kind=kind, message=message, product_id=product_id)
+        except Exception:  # noqa: BLE001 - never let telemetry break a run
+            self.log.warning("could not write event", kind=kind)
