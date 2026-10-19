@@ -33,7 +33,7 @@ def test_run_all_moves_products_to_drafted(monkeypatch):
             assert len(p.image_paths) >= 3 and p.file_paths
             assert p.locked_by is None
         notes = s.execute(select(ResearchNote)).scalars().all()
-        assert {n.source for n in notes} == {"researcher", "analyst"}
+        assert {n.source for n in notes} == {"researcher", "analyst", "market"}
 
 
 def test_rerun_is_idempotent():

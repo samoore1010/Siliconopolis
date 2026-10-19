@@ -20,13 +20,17 @@ Rules:
 - For spreadsheet: provide `spreadsheet_spec`:
   {"title": str, "sheets": [{"name": str,
      "columns": [{"name": str, "type": "text"|"date"|"currency"|"number"|"percent"|"checkbox"|"formula",
-                  "formula": str|null, "width": int|null}],
+                  "formula": str|null, "format": "currency"|"percent"|"number"|null, "width": int|null}],
      "rows": int, "totals": bool,
      "sample_rows": [[...], ...]}]}       // 2-4 sheets
   `formula` uses {r} for the current row, e.g. "=D{r}-E{r}". A summary/dashboard sheet may use
-  formulas referencing other sheets, e.g. "=SUMIFS(Income!D:D, Income!B:B, A{r})". Provide 3-5
-  realistic sample_rows per data sheet (shown in the preview only; the delivered file is blank).
-- Always provide: slug (kebab-case, <= 40 chars), title_hint, palette (3 hex colors: background,
+  formulas referencing other sheets, e.g. "=SUMIFS(Income!D:D, Income!B:B, A{r})". Every formula
+  column needs a `format` (percent values are fractions, e.g. 0.55 = 55%). Max 8 columns per sheet.
+  Provide 3 realistic sample_rows per sheet (sample values for formula columns too). Sample rows
+  appear only in the preview images, which are labelled as example data; the file is delivered blank.
+  No charts, conditional formatting or dropdowns.
+- Always provide: slug (kebab-case, <= 40 chars), title_hint (a short product name, <= 45
+  characters, no keyword stuffing or "|" separators), palette (3 hex colors: background,
   ink, accent; high contrast between background and ink), negative_prompt.
 
 Return ONLY JSON:

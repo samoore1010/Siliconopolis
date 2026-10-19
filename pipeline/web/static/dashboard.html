@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Siliconopolis Dashboard</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo">◆</span> Siliconopolis <span class="sub">your Etsy agent team</span></div>
+    <nav class="tabs" role="tablist">
+      <button data-tab="overview" class="on">Overview</button>
+      <button data-tab="products">Products</button>
+      <button data-tab="research">Market research</button>
+      <a href="/village" class="village">Village view ↗</a>
+      <a href="/status" class="village">System status</a>
+    </nav>
+    <div class="env" id="env"></div>
+  </header>
+
+  <main>
+    <!-- OVERVIEW -->
+    <section id="tab-overview" class="tab on">
+      <div id="attention"></div>
+      <h2 class="h">Where every product is</h2>
+      <p class="hint">Products move left to right. Click a stage to see the products in it.</p>
+      <div class="stages" id="stages"></div>
+      <div class="grid2">
+        <div class="panel">
+          <h2 class="h">What the agents did</h2>
+          <ul class="activity" id="activity"></ul>
+        </div>
+        <div>
+          <div class="panel">
+            <h2 class="h">Spend and limits</h2>
+            <div class="kv" id="spend"></div>
+          </div>
+          <div class="panel">
+            <h2 class="h">Agents</h2>
+            <table class="agents" id="agents"></table>
+            <p class="hint small">Researcher runs Mondays 6 AM; Creator → QA → Lister run daily at 7 AM; Analyst Sundays 8 PM (Phoenix time).</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PRODUCTS -->
+    <section id="tab-products" class="tab">
+      <div class="toolbar">
+        <div class="chips" id="stage-chips"></div>
+        <input id="search" type="search" placeholder="Search products, niches…" aria-label="Search products">
+      </div>
+      <div class="cards" id="cards"></div>
+      <p class="empty" id="cards-empty" hidden>No products here yet.</p>
+    </section>
+
+    <!-- RESEARCH -->
+    <section id="tab-research" class="tab">
+      <p class="hint">Each time the Researcher runs, it studies every niche and writes this analysis before proposing product ideas.</p>
+      <div id="market"></div>
+      <p class="empty" id="market-empty" hidden>No market analyses yet. They appear after the next Researcher run.</p>
+    </section>
+  </main>
+
+  <!-- PRODUCT DETAIL -->
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <button class="close" id="close" aria-label="Close">×</button>
+    <div id="detail"></div>
+  </aside>
+  <div class="lightbox" id="lightbox" hidden><img alt=""></div>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>
