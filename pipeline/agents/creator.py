@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 
+from PIL import Image
 from sqlalchemy.orm import Session
 
 from pipeline.adapters.images import get_image_provider
@@ -127,16 +128,28 @@ class CreatorAgent(Agent):
             html = render.extract_html(fix.text)
         raise RuntimeError(f"page layout still broken after {MAX_LAYOUT_FIXES} fixes: {problems[:3]}")
 
+    @staticmethod
+    def _card(title: str, items: list[str], palette: list[str]) -> bytes:
+        """'What's included' card rendered to fit its content, then framed at listing size."""
+        png = render.html_to_png(mockups.included_html(title, items, palette=palette), width=1000, height=1000,
+                                 full_page=True)
+        return mockups.primary_image(mockups.load(png), bg=palette[0])
+
     # ------------------------------------------------------------------ main
     def _create_one(self, session, product: Product, storage, blocklist, images) -> None:
         brief = {k: v for k, v in (product.brief_json or {}).items() if k not in ("create_attempts", "last_create_error")}
         mock_hint = " (This is a MOCK run; placeholder art is expected.)" if self._is_mock_run else ""
         user = f"Brief:\n{json.dumps({**brief, 'product_type': product.product_type}, indent=2)}{mock_hint}"
-        result = self.ask(session, task="creator_plan", model=self.settings.model_worker, user=user)
+        result = self.ask(session, task="creator_plan", model=self.settings.model_worker, user=user,
+                          max_tokens=16000)
         try:
             plan = result.json()
         except LLMError as e:
             raise RuntimeError(f"creator plan was not valid JSON: {e}") from e
+        if isinstance(plan, list):  # model occasionally wraps the object in a list
+            plan = next((p for p in plan if isinstance(p, dict)), None)
+        if not isinstance(plan, dict):
+            raise RuntimeError("creator plan JSON was not an object")
         product.add_cost(result.cost_usd)
 
         hits = blocklist.check_many(plan.get("image_prompt"), plan.get("title_hint"), json.dumps(plan.get("planner_spec") or {}),
@@ -149,7 +162,7 @@ class CreatorAgent(Agent):
         palette = (plan.get("palette") or []) + ["#F7F3EC", "#2B2B2B", "#A3B18A"]
         palette = palette[:3]
         scene_key = int(hashlib.md5(slug.encode()).hexdigest(), 16)
-        title = str(plan.get("title_hint") or brief.get("concept", "Printable"))[:80]
+        title = mockups.short_title(str(plan.get("title_hint") or brief.get("concept", "Printable")))
         files: list[str] = []
         imgs: list[str] = []
 
@@ -173,9 +186,8 @@ class CreatorAgent(Agent):
                                     mockups.scene_composite(art, scene, kind="wall") if scene else mockups.framed_mockup(art), "image/png"))
             imgs.append(storage.put(f"{base}/listing-03-detail.png", mockups.detail_crop(art), "image/png"))
             sizes = list(PRINT_RATIOS)
-            imgs.append(storage.put(f"{base}/listing-04-included.png", render.html_to_png(
-                mockups.included_html(title, [f"Print ratio {s}" for s in sizes] + ["High-resolution PNG + PDF"],
-                                      palette=palette), width=1000, height=1000), "image/png"))
+            imgs.append(storage.put(f"{base}/listing-04-included.png", self._card(
+                title, [f"Print ratio {s}" for s in sizes] + ["High-resolution PNG files"], palette), "image/png"))
 
         elif product.product_type in (ProductType.PLANNER, ProductType.TRACKER):
             spec = plan.get("planner_spec") or {}
@@ -203,26 +215,32 @@ class CreatorAgent(Agent):
             included = [f"{len(pages)} printable page{'s' if len(pages) > 1 else ''}"] + \
                        [str(p.get("name")) for p in (spec.get("pages") or []) if isinstance(p, dict) and p.get("name")][:4] + \
                        ["US Letter + A4 PDF", "Print at home or at a print shop"]
-            imgs.append(storage.put(f"{base}/listing-04-included.png", render.html_to_png(
-                mockups.included_html(title, included, palette=palette), width=1000, height=1000), "image/png"))
+            imgs.append(storage.put(f"{base}/listing-04-included.png", self._card(title, included, palette), "image/png"))
 
         elif product.product_type == ProductType.SPREADSHEET:
             spec = plan.get("spreadsheet_spec") or {"title": title, "sheets": [{"name": "Sheet1", "columns": ["Date", "Item", "Amount"]}]}
             xlsx = render_spreadsheet(spec, palette=palette)
             files.append(storage.put(f"{base}/{slug}.xlsx", xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
-            preview = mockups.load(render.html_to_png(preview_html(spec, palette=palette), width=1100, height=700,
-                                                      full_page=True))
+            sheets = spec.get("sheets") or []
+
+            def shot(idx: list[int]) -> Image.Image:
+                return mockups.load(render.html_to_png(preview_html(spec, palette=palette, sheets=idx),
+                                                       width=1100, height=700, full_page=True))
+
+            preview = shot([0, 1])
             scene = self._scene(session, storage, images, "desk", scene_key, product)
-            imgs.append(storage.put(f"{base}/listing-01-primary.png", mockups.primary_image(preview), "image/png"))
+            imgs.append(storage.put(f"{base}/listing-01-primary.png", mockups.primary_image(preview, bg=palette[0]), "image/png"))
             imgs.append(storage.put(f"{base}/listing-02-lifestyle.png",
-                                    mockups.scene_composite(preview, scene, framed=True) if scene
+                                    mockups.scene_composite(preview, scene, framed=True, rotate=0) if scene
                                     else mockups.styled_flat_lay(preview, accent=palette[2]), "image/png"))
-            sheet_names = [str(s.get("name")) for s in spec.get("sheets", [])][:5]
-            imgs.append(storage.put(f"{base}/listing-03-included.png", render.html_to_png(
-                mockups.included_html(title, [f"{len(sheet_names)} tabs: " + ", ".join(sheet_names),
-                                              "Formulas and totals built in", "Works in Excel, Google Sheets & Numbers",
-                                              "Blank and ready to fill in"], palette=palette),
-                width=1000, height=1000), "image/png"))
+            if len(sheets) > 2:  # show every remaining tab so buyers (and QA) see all features
+                imgs.append(storage.put(f"{base}/listing-03-more-tabs.png",
+                                        mockups.primary_image(shot(list(range(2, min(len(sheets), 4)))), bg=palette[0]),
+                                        "image/png"))
+            sheet_names = [str(s.get("name")) for s in sheets][:5]
+            imgs.append(storage.put(f"{base}/listing-04-included.png", self._card(title, [
+                f"{len(sheet_names)} tabs: " + ", ".join(sheet_names), "Formulas and totals built in",
+                "Opens in Excel and Google Sheets", "Delivered blank (example data shown in photos)"], palette), "image/png"))
         else:
             raise RuntimeError(f"product_type {product.product_type} is Phase 2 (POD) and not implemented in v1")
 

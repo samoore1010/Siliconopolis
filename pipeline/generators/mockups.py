@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -173,7 +174,8 @@ def page_hero(page: Image.Image, *, bg: str = "#F4EFE8") -> bytes:
     return _to_png(canvas)
 
 
-def scene_composite(art: Image.Image, scene_png: bytes, *, kind: str = "desk", framed: bool = False) -> bytes:
+def scene_composite(art: Image.Image, scene_png: bytes, *, kind: str = "desk", framed: bool = False,
+                    rotate: float = -2.5) -> bytes:
     """Place the product onto an AI-generated lifestyle scene (desk flat-lay or empty wall)."""
     W, H = LISTING_SIZE
     scene = load(scene_png)
@@ -193,7 +195,7 @@ def scene_composite(art: Image.Image, scene_png: bytes, *, kind: str = "desk", f
         if framed:
             piece = Image.new("RGB", (art.width + 40, art.height + 40), "#FFFFFF")
             piece.paste(art, (20, 20))
-        _place(canvas, fit(piece, (int(W * 0.56), int(H * 0.70))), (W // 2, H // 2), rotate=-2.5)
+        _place(canvas, fit(piece, (int(W * 0.62), int(H * 0.72))), (W // 2, H // 2), rotate=rotate)
     return _to_png(canvas)
 
 
@@ -238,18 +240,27 @@ def detail_crop(page: Image.Image, *, bg: str = "#F4EFE8") -> bytes:
     return _to_png(canvas)
 
 
+def short_title(title: str, limit: int = 48) -> str:
+    """Human product name for images: drop SEO tails ("A | B, C") and cut at a word boundary."""
+    t = re.split(r"\s[|•–—-]\s|,\s", title.strip())[0].strip() or title.strip()
+    if len(t) <= limit:
+        return t
+    cut = t[:limit].rsplit(" ", 1)[0].rstrip(" -,:;&")
+    return cut or t[:limit]
+
+
 def included_html(title: str, items: list[str], *, palette: list[str]) -> str:
     import html as html_lib
 
     bg, ink, accent = (list(palette) + ["#F7F3EC", "#2B2B2B", "#A3B18A"])[:3]
     rows = "".join(f"<li><span class='tick'>✓</span>{html_lib.escape(i)}</li>" for i in items[:8])
     return f"""<!doctype html><html><head><meta charset='utf-8'><style>
-body{{margin:0;width:1000px;height:1000px;background:{bg};color:{ink};font-family:Inter,'DejaVu Sans',sans-serif;
+body{{margin:0;width:1000px;min-height:1000px;background:{bg};color:{ink};font-family:Inter,'DejaVu Sans',sans-serif;
 display:flex;align-items:center;justify-content:center}}
 .card{{width:820px;padding:64px 70px;background:#fff;border-radius:28px;box-shadow:0 20px 60px rgba(0,0,0,.10)}}
 .k{{text-transform:uppercase;letter-spacing:.18em;font-size:18px;color:{accent};font-weight:700}}
-h1{{font-family:Poppins,Inter,sans-serif;font-size:44px;line-height:1.15;margin:14px 0 34px}}
-ul{{list-style:none;padding:0;margin:0}} li{{font-size:26px;padding:16px 0;border-top:1px solid #EEE;display:flex;gap:18px}}
+h1{{font-family:Poppins,Inter,sans-serif;font-size:{40 if len(title) <= 32 else 34}px;line-height:1.15;margin:14px 0 34px;overflow-wrap:break-word}}
+ul{{list-style:none;padding:0;margin:0}} li{{font-size:24px;padding:14px 0;border-top:1px solid #EEE;display:flex;gap:18px;overflow-wrap:anywhere}}
 .tick{{color:{accent};font-weight:700}} .foot{{margin-top:34px;font-size:19px;opacity:.7}}
 </style></head><body><div class='card'><div class='k'>What's included</div><h1>{html_lib.escape(title)}</h1>
 <ul>{rows}</ul><div class='foot'>Instant digital download · no physical item will be shipped</div></div></body></html>"""

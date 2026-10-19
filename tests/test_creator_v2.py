@@ -67,7 +67,8 @@ def test_spreadsheet_preview_and_typed_columns(session):
     session.expire_all()
     p = session.get(Product, p.id)
     assert p.state == ProductState.CREATED and p.file_paths[0].endswith(".xlsx")
-    assert len(p.image_paths) == 3
+    # primary (tabs 1-2), lifestyle, remaining tabs (mock spec has 3), what's-included card
+    assert len(p.image_paths) == 4 and any("more-tabs" in i for i in p.image_paths)
 
 
 def test_wall_art_refused_with_mock_images_off_local(session, monkeypatch):
@@ -145,3 +146,23 @@ def test_scene_generated_once_and_cached(session, monkeypatch):
     a = agent._scene(session, storage, FakeReal(), "desk", 0, p)
     b = agent._scene(session, storage, FakeReal(), "desk", 0, p)
     assert a == b and len(calls) == 1 and storage.exists("scenes/desk-0.png")
+
+
+def test_preview_formats_and_short_titles():
+    from pipeline.generators.mockups import short_title
+    from pipeline.generators.xlsx import normalize_columns, preview_html
+
+    assert short_title("Small Business Bookkeeping Spreadsheet | Income Expense Tracker, Profit") == \
+        "Small Business Bookkeeping Spreadsheet"
+    assert len(short_title("Mileage Log Spreadsheet Tracker with Monthly Summary and Totals Included")) <= 48
+    cols = normalize_columns(["Paid?", "Deposit?", "Date Paid", "Outstanding", "Notes"])
+    assert [c["type"] for c in cols] == ["checkbox", "checkbox", "date", "currency", "text"]
+    spec = {"title": "Book | keyword stuffing", "sheets": [
+        {"name": "A", "columns": ["Item"], "sample_rows": [["x"]]},
+        {"name": "B", "columns": ["Item"]},
+        {"name": "Summary", "columns": [{"name": "Profit Margin", "type": "formula", "formula": "=B{r}/A{r}"},
+                                        {"name": "Net", "type": "formula", "formula": "=A{r}", "format": "currency"}],
+         "sample_rows": [[0.55, 1200]]}]}
+    html = preview_html(spec, sheets=[2])
+    assert "55%" in html and "$1,200.00" in html and "keyword stuffing" not in html
+    assert "Example data shown" in html
