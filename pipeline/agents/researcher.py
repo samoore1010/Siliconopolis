@@ -42,6 +42,22 @@ class ResearcherAgent(Agent):
 
         etsy = get_etsy_client()
         blocklist = get_blocklist()
+        etsy_search_ok = True  # flips off after the first failure (e.g. API key still pending approval)
+        # Without a real image provider, wall art would be placeholder images; hold it back on Railway.
+        skip_types = set()
+        if self.settings.image_provider == "mock" and self.settings.app_env != "local":
+            skip_types.add(ProductType.WALL_ART)
+        niches = [
+            {**n, "product_types": [t for t in (n.get("product_types") or ProductType.DIGITAL) if t not in skip_types]}
+            for n in niches
+        ]
+        held = [n.get("name") for n in niches if not n["product_types"]]
+        if held:
+            self.log.warning("skipping niches until a real image provider is configured", niches=held)
+        niches = [n for n in niches if n["product_types"]]
+        if not niches:
+            self.log.warning("no niches eligible this run")
+            return
         per_niche = max(1, min(remaining, 20) // len(niches))
 
         for niche in niches:
@@ -50,17 +66,21 @@ class ResearcherAgent(Agent):
                 break
             signals = []
             for kw in niche.get("keywords", [])[:3]:
+                if not etsy_search_ok:
+                    break
                 try:
                     for r in etsy.search_listings(kw, limit=10):
                         signals.append({"keywords": kw, **{k: v for k, v in asdict(r).items() if k in ("title", "price_usd", "num_favorers", "views", "tags")}})
                 except Exception as e:  # noqa: BLE001
-                    self.note_error(f"etsy search failed for {kw!r}: {e}")
+                    etsy_search_ok = False
+                    self.log.warning("etsy search unavailable; researching from niche keywords only this run",
+                                     keyword=kw, error=str(e)[:200])
             n = min(per_niche, remaining)
             user = (
                 f"Niche config:\n{json.dumps({'niche': niche.get('name'), 'product_types': niche.get('product_types'), 'notes': niche.get('notes')}, indent=2)}\n\n"
                 f"Recent analyst/research notes:\n{notes_text}\n\n"
                 f"Demand signals from Etsy listing search (use only for keywords/price/popularity, never copy):\n"
-                f"{json.dumps(signals[:30], indent=1)}\n\n"
+                f"{json.dumps(signals[:30], indent=1) if signals else '(Etsy search unavailable this run; rely on the niche keywords: ' + ', '.join(niche.get('keywords', [])) + ')'}\n\n"
                 f"Produce exactly {n} original product briefs. Allowed product_type values: "
                 f"{', '.join(niche.get('product_types') or list(ProductType.DIGITAL))}."
             )

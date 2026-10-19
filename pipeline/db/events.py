@@ -19,6 +19,7 @@ class EventKind:
     TRANSITION = "transition"
     CAP_REACHED = "cap_reached"
     ERROR = "error"
+    INFO = "info"
 
 
 def record_event(

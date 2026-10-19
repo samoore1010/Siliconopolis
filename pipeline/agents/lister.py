@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import PurePosixPath
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from pipeline.adapters.etsy import get_etsy_client
+from pipeline.db.events import EventKind
 from pipeline.db.locking import claim_products, release, transition
 from pipeline.db.models import Product, ProductState, ProductType
 from pipeline.guardrails import CapReached, get_blocklist
@@ -42,12 +44,21 @@ class ListerAgent(Agent):
         remaining = remaining_daily_drafts(session, self.settings.daily_draft_cap)
         if remaining <= 0:
             raise CapReached("DAILY_DRAFT_CAP", self.settings.daily_draft_cap, self.settings.daily_draft_cap)
+        etsy = get_etsy_client()
+        if not etsy.is_connected():
+            waiting = session.execute(
+                select(func.count(Product.id)).where(Product.state == ProductState.APPROVED)
+            ).scalar_one()
+            msg = (f"Etsy not connected yet (app approval / OAuth pending): {waiting} approved products "
+                   "waiting; they will be drafted automatically once Etsy is connected.")
+            self.log.warning(msg, waiting=waiting)
+            self._event(EventKind.INFO, msg)
+            return
         owner = f"lister:{self.run_id}"
         products = claim_products(session, state=ProductState.APPROVED, owner=owner, limit=remaining,
                                   lock_timeout_minutes=self.settings.lock_timeout_minutes,
                                   product_types=ProductType.DIGITAL)
         self.log.info("claimed approved products", count=len(products), daily_remaining=remaining)
-        etsy = get_etsy_client()
         storage = get_storage()
         blocklist = get_blocklist()
         taxonomy = {n.id: n for n in etsy.flatten_taxonomy()}
