@@ -112,10 +112,11 @@ class AnthropicLLM(LLMClient):
                 }
             )
         content.append({"type": "text", "text": user})
+        # `temperature` is accepted for interface compatibility but not sent: current Anthropic SDKs and
+        # models no longer take sampling parameters on messages.create.
         resp = self._client.messages.create(
             model=model,
             max_tokens=max_tokens,
-            temperature=temperature,
             system=system,
             messages=[{"role": "user", "content": content}],
         )
