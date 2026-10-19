@@ -100,9 +100,9 @@ def client():
     return TestClient(app)
 
 
-def test_root_redirects_to_village(client):
+def test_root_redirects_to_dashboard(client):
     r = client.get("/", follow_redirects=False)
-    assert r.status_code == 307 and r.headers["location"] == "/village"
+    assert r.status_code == 307 and r.headers["location"] == "/dashboard"
 
 
 def test_village_endpoints_open_in_local_without_auth(client, brief_factory):
@@ -137,7 +137,9 @@ def test_auth_required_when_configured(client, monkeypatch):
     from pipeline.config import reset_settings_cache
 
     reset_settings_cache()
-    for path in ("/village", "/api/village/state", "/api/village/events", "/status", "/oauth/etsy/start"):
+    for path in ("/village", "/api/village/state", "/api/village/events", "/status", "/oauth/etsy/start",
+                 "/dashboard", "/api/dashboard/overview", "/api/dashboard/products", "/api/dashboard/research",
+                 "/api/dashboard/product/1", "/api/dashboard/file/1/0"):
         r = client.get(path)
         assert r.status_code == 401, path
         assert "Basic" in r.headers.get("www-authenticate", "")

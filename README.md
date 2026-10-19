@@ -44,6 +44,7 @@ another (mock mode only; refuses to run in production).
 | 3 — Live-ready (live Etsy adapter, OAuth helper + token table, `DRY_RUN`) | Etsy live client + OAuth + token table built, **unverified against live API**; image provider: OpenAI (`gpt-image-1.5`) |
 | 4 — Printify / POD | interface + mock only |
 | 5 — Village UI (events table, authenticated API, `/village` scene, `demo`) | done |
+| 7 — Owner dashboard (`/dashboard`: products with images/files, why chosen, market analysis, QA verdicts, plain-English activity) | done |
 | 6 — Real product design (Claude-designed HTML planners → Chromium PDFs, typed spreadsheets, AI lifestyle mockups) | done |
 
 ### How products are made (Milestone 6)

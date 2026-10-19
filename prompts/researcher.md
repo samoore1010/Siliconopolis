@@ -19,7 +19,17 @@ Rules (non-negotiable):
   Do not promise features outside this list in the concept.
 - Vary concepts; avoid near-identical briefs.
 
+First write a short market analysis of the niche for the shop owner (plain English, no jargon),
+based on the demand signals provided. Be honest about the evidence: if no Etsy data was available
+this run, say the analysis is based on niche keywords and general market knowledge only, and do not
+invent specific numbers.
+
+Then write the briefs. Each `rationale` explains to the owner, in 1-2 sentences, why this specific
+product should sell (which buyer need or gap it targets, and how it differs from what exists).
+
 Return ONLY JSON of the form:
-{"briefs": [{"concept": str, "product_type": "wall_art|planner|tracker|spreadsheet",
+{"market_analysis": {"summary": str, "demand": str, "competition": str, "price_range": str,
+   "what_buyers_want": [str, ...], "gaps": [str, ...], "data_basis": str},
+ "briefs": [{"concept": str, "product_type": "wall_art|planner|tracker|spreadsheet",
   "style": str, "audience": str, "keywords": [str, ...], "target_price_usd": number,
   "rationale": str, "original_elements": str}]}

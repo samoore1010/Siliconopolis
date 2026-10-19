@@ -36,7 +36,8 @@ class ResearcherAgent(Agent):
             self.note_error("niches.yaml has no niches")
             return
         notes = session.execute(
-            select(ResearchNote).order_by(ResearchNote.created_at.desc()).limit(5)
+            select(ResearchNote).where(ResearchNote.source.in_(["analyst", "researcher"]))
+            .order_by(ResearchNote.created_at.desc()).limit(5)
         ).scalars().all()
         notes_text = "\n\n".join(f"[{n.source} @ {n.created_at:%Y-%m-%d}] {n.content}" for n in notes) or "(none yet)"
 
@@ -87,10 +88,23 @@ class ResearcherAgent(Agent):
             result = self.ask(session, task="research_briefs", model=self.settings.model_research, user=user,
                               max_tokens=16000)
             try:
-                briefs = result.json().get("briefs", [])
+                reply = result.json()
+                briefs = reply.get("briefs", [])
             except Exception as e:  # noqa: BLE001
                 self.note_error(f"researcher: bad JSON for niche {niche.get('name')}: {e}")
                 continue
+            analysis = reply.get("market_analysis") or {}
+            market_note = ResearchNote(source="market", content=json.dumps({
+                "niche": niche.get("name"), "run_id": self.run_id, "analysis": analysis,
+                "etsy_data": bool(signals), "signals_count": len(signals),
+                "signals_sample": sorted(signals, key=lambda x: -(x.get("num_favorers") or 0))[:8],
+                "keywords": niche.get("keywords", []), "product_types": niche.get("product_types"),
+            }))
+            session.add(market_note)
+            session.flush()
+            market_ref = {"note_id": market_note.id, "summary": analysis.get("summary"),
+                          "price_range": analysis.get("price_range"), "data_basis": analysis.get("data_basis"),
+                          "etsy_data": bool(signals)}
             allowed = set(niche.get("product_types") or ProductType.DIGITAL)
             for brief in briefs[:n]:
                 ptype = brief.get("product_type", "")
@@ -102,7 +116,8 @@ class ResearcherAgent(Agent):
                     self.log.warning("skipping brief: blocklist hit", hits=hits)
                     continue
                 product = Product(state=ProductState.BRIEF, niche=str(niche.get("name")), product_type=ptype,
-                                  brief_json={**brief, "niche": niche.get("name"), "run_id": self.run_id})
+                                  brief_json={**brief, "niche": niche.get("name"), "run_id": self.run_id,
+                                              "market": market_ref})
                 product.add_cost(result.cost_usd / max(1, len(briefs)))
                 session.add(product)
                 self.items_processed += 1

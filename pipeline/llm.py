@@ -181,6 +181,15 @@ class MockLLM(LLMClient):
             motifs = ["eucalyptus stem", "single fern frond", "river stones", "quiet moon phases", "wheat sprig",
                       "folded paper crane", "soft arch shapes", "tide lines", "seed heads", "morning window light"]
             return {
+                "market_analysis": {
+                    "summary": f"Mock analysis: steady demand for {niche}; buyers favour simple, specific designs.",
+                    "demand": "Consistent search interest year-round with a January bump.",
+                    "competition": "Many listings, but most are generic bundles.",
+                    "price_range": "$3-$9 for single products, $12-$25 for bundles",
+                    "what_buyers_want": ["clean layouts", "instant download", "US Letter + A4"],
+                    "gaps": ["few products aimed at a specific use-case"],
+                    "data_basis": "Mock data (no Etsy search in tests).",
+                },
                 "briefs": [
                     {
                         "concept": f"Original {niche} concept {i + 1}: {motifs[i % len(motifs)]}, calm and giftable",
