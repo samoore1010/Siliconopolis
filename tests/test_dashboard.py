@@ -61,7 +61,10 @@ def test_dashboard_end_to_end(client):
     assert f.status_code == 200 and f.content
 
     research = client.get("/api/dashboard/research").json()
-    assert research["market"] and research["market"][0]["ideas_in_niche"] >= 1
+    run = research["runs"][0]
+    assert run["brief"] is None and run["ideas"] and run["markets"][0]["analysis"]["summary"]
+    assert research["next_run"] and research["types"]
+    assert isinstance(ov["needs_you"], list) and [s["key"] for s in ov["schedule"]][0] == "researcher"
     assert client.get("/api/dashboard/product/9999").status_code == 404
     assert client.get(f"/api/dashboard/file/{built[0]['id']}/99").status_code == 404
 

@@ -40,3 +40,8 @@ canvas{width:100%;height:auto;display:block;image-rendering:pixelated;image-rend
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:15}.hidden{display:none}
 .note{color:var(--muted);font-size:12px}
 @media (max-width:980px){.layout{grid-template-columns:1fr}.feed{max-height:260px}nav{display:none}}
+
+/* Embedded in the app's Home page: just the office, transparent chrome; the app shows details. */
+body.embed{background:transparent}body.embed .topbar,body.embed .sidebar,body.embed .legend{display:none}
+body.embed .layout{display:block;padding:0;max-width:none}body.embed .scene-wrap{border:0;padding:0;background:transparent;border-radius:0}
+body.embed canvas{border-radius:0}body.embed .hint{top:8px;left:8px}

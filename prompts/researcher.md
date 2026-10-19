@@ -28,9 +28,9 @@ Rules (non-negotiable):
 - Vary concepts; avoid near-identical briefs.
 - Commercial viability first: only propose products that could out-sell the current best sellers
   at the target price (more useful, better designed or more specific), not filler.
-- If the message includes OWNER DIRECTIVES, they are the shop owner's instructions and come first:
-  follow them (themes, seasons, niches, product types to favour or avoid) even when the niche
-  config or past notes point elsewhere.
+- If the message includes an OWNER RUN BRIEF, this run exists to carry it out: every brief must
+  serve it (theme, season, audience, product types, anything to avoid), even when past notes point
+  elsewhere.
 
 First write a short market analysis of the niche for the shop owner (plain English, no jargon),
 based on the demand signals provided. Be honest about the evidence: if no Etsy data was available
@@ -46,5 +46,5 @@ Return ONLY JSON of the form:
  "briefs": [{"concept": str, "product_type": "wall_art|planner|tracker|spreadsheet|apparel|mug",
   "style": str, "audience": str, "keywords": [str, ...], "target_price_usd": number,
   "rationale": str, "original_elements": str,
-  "niche": str,     // only when researching the OWNER DIRECTIVES: a short niche name
+  "niche": str,     // only for an OWNER RUN BRIEF: a short niche name
   "item": str}]}    // apparel/mug only: the catalog item key, e.g. "tshirt", "hoodie", "mug11"

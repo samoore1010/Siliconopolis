@@ -1,9 +1,10 @@
 """Owner dashboard API: what the agents did, in plain English, and the products they made.
 
 Everything shown comes from the database and storage the agents write to. The only writes are the
-owner's own input: shop-wide directives for the Researcher and comments / revision requests on a
-product (which send it back to the Creator). Writes need the custom X-Siliconopolis header, which a
-cross-site form cannot send, so a logged-in browser cannot be tricked into posting them.
+owner's own input: run briefs for the Researcher (each steers exactly one research run), notes and
+change requests on a product (which send it back to the Creator), and deleting products that are not
+on Etsy. Writes need the custom X-Siliconopolis header, which a cross-site form cannot send, so a
+logged-in browser cannot be tricked into posting them.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from pipeline.db import session_scope
 from pipeline.db.events import EventKind, record_event
 from pipeline.db.locking import transition
 from pipeline.db.models import (
+    BriefStatus,
     Event,
     FulfillmentOrder,
     OrderStatus,
@@ -31,12 +33,15 @@ from pipeline.db.models import (
     OwnerNoteKind,
     Product,
     ProductState,
+    ProductType,
     ResearchNote,
+    ResearchRequest,
     Run,
     utcnow,
 )
 from pipeline.generators.mockups import short_title
 from pipeline.guardrails.caps import briefs_this_week, drafts_today, todays_spend
+from pipeline.schedule import next_run
 from pipeline.storage import get_storage
 from pipeline.web.auth import require_viewer
 from pipeline.web.village_state import _aware, product_summary
@@ -60,9 +65,18 @@ class CommentIn(NoteIn):
     revise: bool = False
 
 
-class DirectivePatch(BaseModel):
-    text: str | None = Field(None, min_length=1, max_length=MAX_NOTE_CHARS)
-    active: bool | None = None
+class BriefIn(BaseModel):
+    focus: str = Field(min_length=3, max_length=MAX_NOTE_CHARS)
+    product_types: list[str] = Field(default_factory=list)
+    idea_count: int = Field(6, ge=1, le=20)
+
+
+class DeleteIn(BaseModel):
+    ids: list[int] = Field(default_factory=list, max_length=500)
+    state: str | None = None  # e.g. "rejected": delete every product in that state
+
+
+UNDELETABLE = (ProductState.DRAFTED, ProductState.PUBLISHED)
 
 
 def _note(n: OwnerNote) -> dict[str, Any]:
@@ -107,6 +121,8 @@ def _card(p: Product) -> dict[str, Any]:
         "top_reason": str(reasons[0])[:220] if reasons and not qa.get("pass") else None,
         "created_at": _aware(p.created_at).isoformat() if p.created_at else None,
         "revision_pending": bool(brief.get("revision")),
+        "deletable": p.state not in UNDELETABLE and not p.locked_by,
+        "from_brief": brief.get("from_brief"),
     }
 
 
@@ -156,7 +172,7 @@ def overview():
                                      .where(Run.started_at >= week_ago)).scalar_one())
         spend_total = float(s.execute(select(func.coalesce(func.sum(Run.cost_usd), 0.0))).scalar_one())
         events = s.execute(select(Event).where(Event.kind != EventKind.RUN_STARTED)
-                           .order_by(Event.id.desc()).limit(40)).scalars().all()
+                           .order_by(Event.id.desc()).limit(150)).scalars().all()
         ids = {e.product_id for e in events if e.product_id}
         titles = {p.id: short_title(_title(p)) for p in s.execute(select(Product).where(Product.id.in_(ids))).scalars()} if ids else {}
         activity = [{"ts": _aware(e.ts).isoformat(), "agent": e.agent, "kind": e.kind, "product_id": e.product_id,
@@ -171,6 +187,8 @@ def overview():
         order_counts = dict(s.execute(select(FulfillmentOrder.status, func.count(FulfillmentOrder.id))
                                       .group_by(FulfillmentOrder.status)).all())
         briefs_week = briefs_this_week(s)
+        briefs_queued = s.execute(select(func.count(ResearchRequest.id))
+                                  .where(ResearchRequest.status == BriefStatus.QUEUED)).scalar_one()
         spent_today = todays_spend(s)
         drafted_today = drafts_today(s)
 
@@ -183,33 +201,58 @@ def overview():
             except Exception:  # noqa: BLE001
                 etsy_connected = False
 
-    attention = []
-    if order_counts.get(OrderStatus.NEEDS_REVIEW):
-        attention.append({"level": "action", "text": f"{order_counts[OrderStatus.NEEDS_REVIEW]} shirt/mug order(s) need "
-                          "your check before printing (unclear or unusual personalisation). Open the Print queue."})
-    waiting = order_counts.get(OrderStatus.READY, 0) + order_counts.get(OrderStatus.PRINTING, 0)
-    if waiting:
-        attention.append({"level": "info", "text": f"{waiting} order(s) are with the print shop."})
+    # What needs the owner, most urgent first. Each item has ONE clear next step inside the app.
+    needs: list[dict[str, Any]] = []
+
+    def need(level: str, title: str, detail: str, cta: str | None = None, route: str | None = None) -> None:
+        needs.append({"level": level, "title": title, "detail": detail, "cta": cta, "route": route})
+
+    n_check = order_counts.get(OrderStatus.NEEDS_REVIEW, 0)
+    if n_check:
+        need("action", f"{n_check} order{'s' if n_check != 1 else ''} to check before printing",
+             "The buyer's personalisation is unclear or unusual. Fix it or approve it so the print shop can go ahead.",
+             "Check orders", "orders")
     if counts.get(ProductState.DRAFTED):
-        attention.append({"level": "action", "text": f"{counts[ProductState.DRAFTED]} Etsy draft(s) are waiting for you "
-                          "to review and publish in the Etsy app."})
-    if etsy_live and not etsy_connected:
-        attention.append({"level": "warn", "text": "Etsy isn't connected yet (app approval / authorization pending). "
-                          f"{counts.get(ProductState.APPROVED, 0)} approved product(s) will be drafted automatically once it is."})
-    if briefs_week >= settings.weekly_brief_cap:
-        attention.append({"level": "warn", "text": f"The Researcher hit its weekly limit of {settings.weekly_brief_cap} ideas. "
-                          "Raise WEEKLY_BRIEF_CAP in Railway for more this week."})
-    if spent_today >= settings.max_daily_spend_usd * 0.8:
-        attention.append({"level": "warn", "text": f"Today's AI spend is ${spent_today:.2f} of the ${settings.max_daily_spend_usd:.0f} daily limit."})
-    if settings.image_provider == "mock" and settings.app_env != "local":
-        attention.append({"level": "info", "text": "Wall art is paused until an image provider (OpenAI) is configured."})
+        n = counts[ProductState.DRAFTED]
+        need("action", f"{n} Etsy draft{'s' if n != 1 else ''} ready for you to publish",
+             "Review each draft in the Etsy app and publish the ones you like. Nothing is published without you.",
+             "See drafts", "products/etsy")
+    if counts.get(ProductState.REJECTED):
+        n = counts[ProductState.REJECTED]
+        need("review", f"{n} rejected idea{'s' if n != 1 else ''}",
+             "See why QA said no, ask the Creator to rebuild the ones worth saving, and delete the rest.",
+             "Review rejected", "products/rejected")
     failed = [AGENT_LABEL[a] for a, r in last_runs.items() if r["status"] == "failed"]
     if failed:
-        attention.append({"level": "warn", "text": "Last run failed for: " + ", ".join(failed) + ". See Activity for details."})
+        need("warn", f"{', '.join(failed)} hit a problem on the last run",
+             "The next scheduled run will try again. Open the team page to see the error.", "See team", "team")
+    if briefs_week >= settings.weekly_brief_cap:
+        need("warn", "The Researcher reached this week's idea limit",
+             f"{settings.weekly_brief_cap} ideas per week (WEEKLY_BRIEF_CAP in Railway). New ideas resume on Monday.",
+             None, None)
+    if spent_today >= settings.max_daily_spend_usd * 0.8:
+        need("warn", f"AI spend today is ${spent_today:.2f} of ${settings.max_daily_spend_usd:.0f}",
+             "Agents stop for the day when the limit is reached.", None, None)
+    if etsy_live and not etsy_connected:
+        need("info", "Etsy isn't connected yet",
+             f"Waiting for app approval. {counts.get(ProductState.APPROVED, 0)} approved product(s) will be drafted "
+             "automatically once it is.", None, None)
+    waiting_print = order_counts.get(OrderStatus.READY, 0) + order_counts.get(OrderStatus.PRINTING, 0)
+    if waiting_print:
+        need("info", f"{waiting_print} order{'s' if waiting_print != 1 else ''} with the print shop",
+             "Being printed. Tracking goes to the buyer automatically when they ship.", "See orders", "orders")
+    if settings.image_provider == "mock" and settings.app_env != "local":
+        need("info", "Wall art is paused", "It needs an image provider (OpenAI) to be configured.", None, None)
+
+    now = datetime.now(UTC)
+    schedule = [{"key": k, "label": label, "at": next_run(k, now).isoformat()} for k, label in (
+        ("researcher", "Research run"), ("creator", "Build, review & list"), ("fulfiller", "Order check"),
+        ("analyst", "Sales analysis"))]
 
     stages = [{**st, "count": counts.get(st["state"], 0)} for st in STAGES]
     return {
-        "stages": stages, "attention": attention, "activity": activity, "last_runs": last_runs,
+        "stages": stages, "needs_you": needs, "schedule": schedule, "briefs_queued": briefs_queued,
+        "activity": activity, "last_runs": last_runs,
         "orders": {k: order_counts.get(k, 0) for k in OrderStatus.ALL},
         "spend": {"today": round(spent_today, 2), "week": round(spend_week, 2), "total": round(spend_total, 2),
                   "daily_limit": settings.max_daily_spend_usd},
@@ -311,26 +354,162 @@ def product_file(product_id: int, index: str):
     return Response(data, media_type=media, headers={"Content-Disposition": f'{disposition}; filename="{name}"'})
 
 
+def _brief(b: ResearchRequest) -> dict[str, Any]:
+    iso = lambda d: _aware(d).isoformat() if d else None  # noqa: E731
+    return {"id": b.id, "focus": b.focus, "product_types": b.product_types or [], "idea_count": b.idea_count,
+            "status": b.status, "run_id": b.run_id, "created_at": iso(b.created_at), "started_at": iso(b.started_at),
+            "finished_at": iso(b.finished_at), "product_ids": [int(i) for i in b.product_ids or []], "note": b.note}
+
+
+def _types_available() -> list[dict[str, str]]:
+    settings = get_settings()
+    types = list(ProductType.DIGITAL) + list(ProductType.PHYSICAL)
+    if settings.image_provider == "mock" and settings.app_env != "local":
+        types.remove(ProductType.WALL_ART)
+    return [{"key": t, "label": TYPE_LABEL.get(t, t)} for t in types]
+
+
 @router.get("/research")
-def research(limit: int = Query(30, ge=1, le=200)):
+def research(limit: int = Query(15, ge=1, le=100)):
+    """Research, organised by run: what was asked (the brief, if any), what was found, what was made."""
+    settings = get_settings()
     with session_scope() as s:
-        notes = s.execute(select(ResearchNote).order_by(ResearchNote.created_at.desc()).limit(limit)).scalars().all()
-        market, notes_out = [], []
-        for n in notes:
-            if n.source == "market":
-                try:
-                    data = json.loads(n.content)
-                except json.JSONDecodeError:
-                    continue
-                count = s.execute(select(func.count(Product.id)).where(
-                    Product.niche == data.get("niche"))).scalar_one()
-                market.append({**data, "id": n.id, "created_at": _aware(n.created_at).isoformat(), "ideas_in_niche": count})
-            else:
-                notes_out.append({"source": n.source, "created_at": _aware(n.created_at).isoformat(), "content": n.content})
-    return {"market": market, "notes": notes_out}
+        runs = s.execute(select(Run).where(Run.agent == "researcher").order_by(Run.started_at.desc())
+                         .limit(limit)).scalars().all()
+        run_ids = {r.id for r in runs}
+        briefs = s.execute(select(ResearchRequest).order_by(ResearchRequest.created_at.desc()).limit(100)).scalars().all()
+        by_run_brief = {b.run_id: b for b in briefs if b.run_id}
+        markets: dict[int, list[dict]] = {}
+        for n in s.execute(select(ResearchNote).where(ResearchNote.source == "market")
+                           .order_by(ResearchNote.created_at.desc()).limit(300)).scalars():
+            try:
+                data = json.loads(n.content)
+            except json.JSONDecodeError:
+                continue
+            if data.get("run_id") in run_ids:
+                markets.setdefault(data["run_id"], []).append({**data, "id": n.id})
+        ideas: dict[int, list[dict]] = {}
+        for p in s.execute(select(Product).order_by(Product.id.asc())).scalars():
+            rid = (p.brief_json or {}).get("run_id")
+            if rid in run_ids:
+                ideas.setdefault(rid, []).append(_card(p))
+        out_runs = []
+        for r in runs:
+            b = by_run_brief.get(r.id)
+            out_runs.append({
+                "run_id": r.id, "started_at": _aware(r.started_at).isoformat(), "status": r.status,
+                "cost_usd": round(r.cost_usd or 0, 3), "errors": r.errors_json or [],
+                "brief": _brief(b) if b else None, "ideas": ideas.get(r.id, []), "markets": markets.get(r.id, [])})
+        queued = [_brief(b) for b in sorted(briefs, key=lambda b: b.created_at) if b.status in
+                  (BriefStatus.QUEUED, BriefStatus.RUNNING)]
+        used = briefs_this_week(s)
+    return {
+        "queued": queued, "runs": out_runs, "next_run": next_run("researcher").isoformat(),
+        "run_now_available": settings.run_now_enabled, "types": _types_available(),
+        "weekly": {"used": used, "cap": settings.weekly_brief_cap},
+    }
 
 
-# ---------------------------------------------------------------------------------------------- owner input
+@router.post("/research/briefs", dependencies=[Depends(require_write)])
+def add_brief(body: BriefIn):
+    allowed = {t["key"] for t in _types_available()}
+    with session_scope() as s:
+        b = ResearchRequest(focus=body.focus.strip(), product_types=[t for t in body.product_types if t in allowed],
+                            idea_count=body.idea_count, status=BriefStatus.QUEUED, product_ids=[])
+        s.add(b)
+        record_event(s, kind=EventKind.INFO, agent="owner", message=f"Run brief queued: {b.focus[:160]}")
+        s.flush()
+        return {"brief": _brief(b)}
+
+
+@router.patch("/research/briefs/{brief_id}", dependencies=[Depends(require_write)])
+def edit_brief(brief_id: int, body: BriefIn):
+    allowed = {t["key"] for t in _types_available()}
+    with session_scope() as s:
+        b = s.get(ResearchRequest, brief_id)
+        if not b:
+            raise HTTPException(404, "unknown brief")
+        if b.status != BriefStatus.QUEUED:
+            raise HTTPException(409, "This brief has already been used by a run, so it can't be changed.")
+        b.focus, b.idea_count = body.focus.strip(), body.idea_count
+        b.product_types = [t for t in body.product_types if t in allowed]
+        s.flush()
+        return {"brief": _brief(b)}
+
+
+@router.delete("/research/briefs/{brief_id}", dependencies=[Depends(require_write)])
+def cancel_brief(brief_id: int):
+    with session_scope() as s:
+        b = s.get(ResearchRequest, brief_id)
+        if not b:
+            raise HTTPException(404, "unknown brief")
+        if b.status != BriefStatus.QUEUED:
+            raise HTTPException(409, "Only a brief that is still waiting for its run can be cancelled.")
+        b.status = BriefStatus.CANCELLED
+        return {"brief": _brief(b)}
+
+
+@router.post("/research/run-now", dependencies=[Depends(require_write)])
+def research_run_now():
+    from pipeline.web.village_api import village_run_now
+
+    return village_run_now("researcher")
+
+
+# ---------------------------------------------------------------------------------------------- delete
+def _delete_product(s, p: Product, storage) -> str | None:
+    """Remove a product, its notes and its files. Returns a reason when it can't be deleted."""
+    if p.state in UNDELETABLE:
+        return "it is on Etsy; delete it there"
+    if p.locked_by:
+        return "an agent is working on it right now"
+    keys = set()
+    for path in (p.file_paths or []) + (p.image_paths or []):
+        key = storage.key_from_uri(path)
+        keys.add(key)
+        folder = key.rsplit("/", 1)[0] + "/" if "/" in key else None
+        if folder and folder.startswith("products/") and folder.count("/") == 2:
+            keys.update(storage.list(folder))
+    for key in keys:
+        try:
+            storage.delete(key)
+        except Exception:  # noqa: BLE001 - a missing file must not block deleting the record
+            pass
+    for n in s.execute(select(OwnerNote).where(OwnerNote.product_id == p.id)).scalars():
+        s.delete(n)
+    record_event(s, kind=EventKind.INFO, agent="owner", message=f"Owner deleted {short_title(_title(p))!r}")
+    s.delete(p)
+    return None
+
+
+@router.delete("/product/{product_id}", dependencies=[Depends(require_write)])
+def delete_product(product_id: int):
+    with session_scope() as s:
+        p = s.get(Product, product_id)
+        if not p:
+            raise HTTPException(404, "unknown product")
+        reason = _delete_product(s, p, get_storage())
+        if reason:
+            raise HTTPException(409, f"Can't delete: {reason}.")
+        return {"deleted": [product_id]}
+
+
+@router.post("/products/delete", dependencies=[Depends(require_write)])
+def delete_products(body: DeleteIn):
+    """Bulk delete: a list of ids, or every product in one state (e.g. all rejected)."""
+    if not body.ids and body.state not in (ProductState.REJECTED, ProductState.BRIEF):
+        raise HTTPException(422, "Pass ids, or state 'rejected' / 'brief'.")
+    storage = get_storage()
+    deleted, skipped = [], []
+    with session_scope() as s:
+        stmt = select(Product).where(Product.id.in_(body.ids)) if body.ids else \
+            select(Product).where(Product.state == body.state)
+        for p in s.execute(stmt).scalars().all():
+            reason = _delete_product(s, p, storage)
+            (skipped.append({"id": p.id, "reason": reason}) if reason else deleted.append(p.id))
+    return {"deleted": deleted, "skipped": skipped}
+
+
 @router.post("/product/{product_id}/comments", dependencies=[Depends(require_write)])
 def add_comment(product_id: int, body: CommentIn):
     """Leave a note on a product. With revise=true the product goes back to the Creator, which rebuilds
@@ -375,45 +554,3 @@ def add_comment(product_id: int, body: CommentIn):
             record_event(s, kind=EventKind.INFO, agent="owner", product_id=p.id, message=f"Owner commented: {text[:160]}")
         s.flush()
         return {"comment": _note(note), "state": p.state}
-
-
-@router.get("/directives")
-def list_directives():
-    with session_scope() as s:
-        rows = s.execute(select(OwnerNote).where(OwnerNote.kind == OwnerNoteKind.DIRECTIVE)
-                         .order_by(OwnerNote.active.desc(), OwnerNote.id.desc())).scalars().all()
-        return {"directives": [_note(n) for n in rows]}
-
-
-@router.post("/directives", dependencies=[Depends(require_write)])
-def add_directive(body: NoteIn):
-    with session_scope() as s:
-        n = OwnerNote(kind=OwnerNoteKind.DIRECTIVE, text=body.text.strip(), active=True)
-        s.add(n)
-        record_event(s, kind=EventKind.INFO, agent="owner", message=f"New direction for the team: {n.text[:160]}")
-        s.flush()
-        return {"directive": _note(n)}
-
-
-@router.patch("/directives/{note_id}", dependencies=[Depends(require_write)])
-def update_directive(note_id: int, body: DirectivePatch):
-    with session_scope() as s:
-        n = s.get(OwnerNote, note_id)
-        if not n or n.kind != OwnerNoteKind.DIRECTIVE:
-            raise HTTPException(404, "unknown directive")
-        if body.text is not None:
-            n.text = body.text.strip()
-        if body.active is not None:
-            n.active = body.active
-        s.flush()
-        return {"directive": _note(n)}
-
-
-@router.delete("/directives/{note_id}", dependencies=[Depends(require_write)])
-def delete_directive(note_id: int):
-    with session_scope() as s:
-        n = s.get(OwnerNote, note_id)
-        if not n or n.kind != OwnerNoteKind.DIRECTIVE:
-            raise HTTPException(404, "unknown directive")
-        s.delete(n)
-        return {"deleted": note_id}
