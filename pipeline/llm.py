@@ -37,8 +37,17 @@ class LLMResult:
     cost_usd: float = 0.0
     raw: Any = field(default=None, repr=False)
 
+    @property
+    def truncated(self) -> bool:
+        return getattr(self.raw, "stop_reason", None) == "max_tokens"
+
     def json(self) -> Any:
-        return extract_json(self.text)
+        try:
+            return extract_json(self.text)
+        except LLMError as e:
+            if self.truncated:
+                raise LLMError(f"model reply was cut off at the max_tokens limit, so its JSON is incomplete: {e}") from e
+            raise
 
 
 def extract_json(text: str) -> Any:
@@ -114,12 +123,16 @@ class AnthropicLLM(LLMClient):
         content.append({"type": "text", "text": user})
         # `temperature` is accepted for interface compatibility but not sent: current Anthropic SDKs and
         # models no longer take sampling parameters on messages.create.
-        resp = self._client.messages.create(
+        # Streamed so large max_tokens values don't hit the SDK's non-streaming timeout guard.
+        with self._client.messages.stream(
             model=model,
             max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": content}],
-        )
+        ) as stream:
+            resp = stream.get_final_message()
+        if getattr(resp, "stop_reason", None) == "max_tokens":
+            log.warning("llm reply truncated at max_tokens", task=task, model=model, max_tokens=max_tokens)
         text = "".join(block.text for block in resp.content if getattr(block, "type", "") == "text")
         usage = resp.usage
         result = LLMResult(
