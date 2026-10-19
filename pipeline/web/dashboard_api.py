@@ -25,6 +25,8 @@ from pipeline.db.events import EventKind, record_event
 from pipeline.db.locking import transition
 from pipeline.db.models import (
     Event,
+    FulfillmentOrder,
+    OrderStatus,
     OwnerNote,
     OwnerNoteKind,
     Product,
@@ -77,8 +79,10 @@ STAGES = [
     {"state": ProductState.REJECTED, "label": "Rejected", "help": "Failed QA or could not be built"},
 ]
 STATE_LABEL = {s["state"]: s["label"] for s in STAGES} | {ProductState.RETIRED: "Retired"}
-TYPE_LABEL = {"wall_art": "Wall art", "planner": "Planner", "tracker": "Tracker", "spreadsheet": "Spreadsheet"}
-AGENT_LABEL = {"researcher": "Researcher", "creator": "Creator", "qa": "QA", "lister": "Lister", "analyst": "Analyst"}
+TYPE_LABEL = {"wall_art": "Wall art", "planner": "Planner", "tracker": "Tracker", "spreadsheet": "Spreadsheet",
+              "apparel": "Apparel", "mug": "Mug"}
+AGENT_LABEL = {"researcher": "Researcher", "creator": "Creator", "qa": "QA", "lister": "Lister", "analyst": "Analyst",
+               "fulfiller": "Fulfiller"}
 FILE_TYPES = {".pdf": "application/pdf", ".png": "image/png", ".xlsx":
               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".html": "text/html"}
 
@@ -164,6 +168,8 @@ def overview():
             if r:
                 last_runs[name] = {"status": r.status, "at": _aware(r.started_at).isoformat(), "items": r.items_processed,
                                    "cost_usd": round(r.cost_usd or 0, 4), "errors": len(r.errors_json or [])}
+        order_counts = dict(s.execute(select(FulfillmentOrder.status, func.count(FulfillmentOrder.id))
+                                      .group_by(FulfillmentOrder.status)).all())
         briefs_week = briefs_this_week(s)
         spent_today = todays_spend(s)
         drafted_today = drafts_today(s)
@@ -178,6 +184,12 @@ def overview():
                 etsy_connected = False
 
     attention = []
+    if order_counts.get(OrderStatus.NEEDS_REVIEW):
+        attention.append({"level": "action", "text": f"{order_counts[OrderStatus.NEEDS_REVIEW]} shirt/mug order(s) need "
+                          "your check before printing (unclear or unusual personalisation). Open the Print queue."})
+    waiting = order_counts.get(OrderStatus.READY, 0) + order_counts.get(OrderStatus.PRINTING, 0)
+    if waiting:
+        attention.append({"level": "info", "text": f"{waiting} order(s) are with the print shop."})
     if counts.get(ProductState.DRAFTED):
         attention.append({"level": "action", "text": f"{counts[ProductState.DRAFTED]} Etsy draft(s) are waiting for you "
                           "to review and publish in the Etsy app."})
@@ -198,6 +210,7 @@ def overview():
     stages = [{**st, "count": counts.get(st["state"], 0)} for st in STAGES]
     return {
         "stages": stages, "attention": attention, "activity": activity, "last_runs": last_runs,
+        "orders": {k: order_counts.get(k, 0) for k in OrderStatus.ALL},
         "spend": {"today": round(spent_today, 2), "week": round(spend_week, 2), "total": round(spend_total, 2),
                   "daily_limit": settings.max_daily_spend_usd},
         "limits": {"ideas_this_week": briefs_week, "ideas_cap": settings.weekly_brief_cap,

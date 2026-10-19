@@ -60,6 +60,11 @@ class Settings(BaseSettings):
         "http://localhost:8000/oauth/etsy/callback", alias="ETSY_REDIRECT_URI"
     )
     etsy_rate_limit_per_sec: float = Field(4.0, alias="ETSY_RATE_LIMIT_PER_SEC")
+    # physical (in-house) listings: set these from Etsy Shop Manager before the Lister can draft them
+    etsy_shipping_profile_id: str = Field("", alias="ETSY_SHIPPING_PROFILE_ID")
+    etsy_production_partner_id: str = Field("", alias="ETSY_PRODUCTION_PARTNER_ID")
+    etsy_readiness_state_id: str = Field("", alias="ETSY_READINESS_STATE_ID")
+    etsy_return_policy_id: str = Field("", alias="ETSY_RETURN_POLICY_ID")
 
     # printify
     printify_mode: Literal["", "mock", "live"] = Field("", alias="PRINTIFY_MODE")
@@ -83,6 +88,7 @@ class Settings(BaseSettings):
 
     # config files
     niches_file: str = Field("niches.yaml", alias="NICHES_FILE")
+    catalog_file: str = Field("catalog.yaml", alias="CATALOG_FILE")
     blocklist_file: str = Field("blocklist.txt", alias="BLOCKLIST_FILE")
     prompts_dir: str = Field("prompts", alias="PROMPTS_DIR")
 
@@ -90,6 +96,9 @@ class Settings(BaseSettings):
     port: int = Field(8000, alias="PORT")
     village_user: str = Field("", alias="VILLAGE_USER")
     village_password: str = Field("", alias="VILLAGE_PASSWORD")
+    # separate login for the print shop's order queue (/print); it cannot see the rest of the dashboard
+    print_user: str = Field("", alias="PRINT_USER")
+    print_password: str = Field("", alias="PRINT_PASSWORD")
     # Optional "Run now": Railway API token + JSON map {"researcher": "<serviceId>", "daily": "...", "analyst": "..."}
     railway_api_token: str = Field("", alias="RAILWAY_API_TOKEN")
     railway_environment_id: str = Field("", alias="RAILWAY_ENVIRONMENT_ID")
@@ -126,6 +135,10 @@ class Settings(BaseSettings):
     @property
     def village_auth_configured(self) -> bool:
         return bool(self.village_user and self.village_password)
+
+    @property
+    def print_auth_configured(self) -> bool:
+        return bool(self.print_user and self.print_password)
 
     @property
     def run_now_enabled(self) -> bool:

@@ -9,6 +9,7 @@ def _reset_all_caches():
     from pipeline.adapters.etsy.base import reset_etsy_cache
     from pipeline.adapters.images.base import reset_image_provider_cache
     from pipeline.adapters.printify.base import reset_printify_cache
+    from pipeline.catalog import reset_catalog_cache
     from pipeline.config import reset_settings_cache
     from pipeline.db.session import dispose_engine
     from pipeline.guardrails.blocklist import reset_blocklist_cache
@@ -25,6 +26,7 @@ def _reset_all_caches():
     reset_image_provider_cache()
     reset_blocklist_cache()
     load_prompt.cache_clear()
+    reset_catalog_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -40,7 +42,7 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("DAILY_DRAFT_CAP", "10")
     monkeypatch.setenv("WEEKLY_BRIEF_CAP", "20")
     monkeypatch.setenv("MAX_DAILY_SPEND_USD", "10")
-    for k in ("ANTHROPIC_API_KEY", "ETSY_MODE", "PRINTIFY_MODE"):
+    for k in ("ANTHROPIC_API_KEY", "ETSY_MODE", "PRINTIFY_MODE", "PRINT_USER", "PRINT_PASSWORD", "ETSY_SHIPPING_PROFILE_ID"):
         monkeypatch.delenv(k, raising=False)
     # never read a developer's .env during tests
     monkeypatch.chdir(tmp_path)
@@ -51,6 +53,7 @@ def isolated_env(tmp_path, monkeypatch):
     s = get_settings()
     # config files live in the repo
     monkeypatch.setenv("NICHES_FILE", str(PROJECT_ROOT / "niches.yaml"))
+    monkeypatch.setenv("CATALOG_FILE", str(PROJECT_ROOT / "catalog.yaml"))
     monkeypatch.setenv("BLOCKLIST_FILE", str(PROJECT_ROOT / "blocklist.txt"))
     monkeypatch.setenv("PROMPTS_DIR", str(PROJECT_ROOT / "prompts"))
     _reset_all_caches()

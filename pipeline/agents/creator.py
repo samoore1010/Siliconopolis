@@ -18,9 +18,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pipeline.adapters.images import get_image_provider
+from pipeline.catalog import get_catalog
 from pipeline.db.locking import claim_products, release, transition
 from pipeline.db.models import OwnerNote, OwnerNoteKind, Product, ProductState, ProductType
-from pipeline.generators import mockups, office, render
+from pipeline.generators import merch, mockups, office, render
 from pipeline.generators.pdf import image_to_pdf
 from pipeline.generators.xlsx import (
     SpreadsheetError,
@@ -156,9 +157,9 @@ class CreatorAgent(Agent):
         raise RuntimeError(f"page layout still broken after {MAX_LAYOUT_FIXES} fixes: {problems[:3]}")
 
     @staticmethod
-    def _card(title: str, items: list[str], palette: list[str]) -> bytes:
+    def _card(title: str, items: list[str], palette: list[str], **kw) -> bytes:
         """'What's included' card rendered to fit its content, then framed at listing size."""
-        png = render.html_to_png(mockups.included_html(title, items, palette=palette), width=1000, height=1000,
+        png = render.html_to_png(mockups.included_html(title, items, palette=palette, **kw), width=1000, height=1000,
                                  full_page=True)
         return mockups.primary_image(mockups.load(png), bg=palette[0])
 
@@ -203,6 +204,153 @@ class CreatorAgent(Agent):
                 spec = fixed.get("spreadsheet_spec") if isinstance(fixed.get("spreadsheet_spec"), dict) else fixed
         raise SpreadsheetError([f"spreadsheet failed validation after {MAX_SHEET_FIXES} fixes"] + problems[:5])
 
+    # ------------------------------------------------------------------ in-house apparel / mugs
+    def _merch_art(self, session, product: Product, spec: dict, images) -> bytes | None:
+        prompt = str(spec.get("illustration_prompt") or "").strip()
+        if not prompt:
+            return None
+        if not images.is_real and not self._is_mock_run:
+            raise RuntimeError("this design needs an illustration but no real IMAGE_PROVIDER is configured")
+        gen = images.generate(prompt + "\nIsolated artwork for printing on merchandise: transparent background, "
+                              "no mockup, no product, no text or lettering, crisp clean edges.",
+                              size=(1024, 1024), transparent=True,
+                              negative_prompt="text, letters, watermark, logo, brand, background scene, t-shirt, mug")
+        product.add_cost(gen.cost_usd)
+        self.record_cost(session, gen.cost_usd, kind="image")
+        return gen.data
+
+    def _design_merch(self, session, product: Product, spec: dict, item, art_uri: str | None, note: str) -> tuple[str, render.PrintRender]:
+        """Claude designs the print as HTML/CSS; we render it at print resolution and send problems back."""
+        w, h = item.print_area["width_in"], item.print_area["height_in"]
+        fields = (spec.get("personalization") or {}).get("fields") or []
+        example = {str(f.get("key")): str(f.get("example") or f.get("label") or "Name") for f in fields if f.get("key")}
+        stress = {k: ("Mw" * 20)[:int(next((f.get("max_chars") for f in fields if f.get("key") == k), 12) or 12)] for k in example}
+        colors = {c: item.colors[c] for c in spec.get("colors") or [] if c in item.colors}
+        user = (f"Design brief:\n{json.dumps(spec, indent=2)}\n\nProduct: {item.label} ({item.method}); print area "
+                f"{item.print_area['name']} {w} x {h} in.\nBlank colours it will be printed on: {json.dumps(colors)}\n"
+                f"Illustration available as {{{{art}}}}: {'yes' if art_uri else 'no'}\n"
+                f"Personalisation placeholders: {', '.join('{{' + k + '}}' for k in example) or 'none'}"
+                + ("\nMug: the wrap is seen from the front; keep the main design within the middle 40% of the width "
+                   "(you may repeat a smaller motif on the far left/right)." if item.product_type == "mug" else "")
+                + note)
+        result = self.ask(session, task="creator_merch_html", model=self.settings.model_worker, user=user,
+                          max_tokens=12000, prompt="creator_merch")
+        product.add_cost(result.cost_usd)
+        html = render.extract_html(result.text)
+        problems: list[str] = []
+        for attempt in range(MAX_LAYOUT_FIXES + 1):
+            sample = render.render_print_file(html, width_in=w, height_in=h, dpi=get_catalog().min_dpi,
+                                              values=example, art_uri=art_uri)
+            problems = list(sample.problems)
+            if example:
+                long = render.render_print_file(html, width_in=w, height_in=h, dpi=40, values=stress, art_uri=art_uri)
+                problems += [f"with a {len(next(iter(stress.values())))}-character name: {p}" for p in long.problems
+                             if "only uses" not in p]  # fit/edge problems only; coverage is judged on the sample
+            problems += self._contrast_problems(item, sample.png, list(colors))
+            if not problems:
+                return html, sample
+            self.log.info("merch design problems; asking for a fix", product_id=product.id, problems=problems[:5])
+            if attempt == MAX_LAYOUT_FIXES:
+                break
+            fix = self.ask(session, task="creator_merch_fix", model=self.settings.model_worker, max_tokens=12000,
+                           prompt="creator_merch",
+                           user=(f"{user}\n\nYour previous design rendered with these problems:\n- " + "\n- ".join(problems[:10])
+                                 + f"\n\nFix every problem. Return the full corrected document.\n\n```html\n{html}\n```"))
+            product.add_cost(fix.cost_usd)
+            html = render.extract_html(fix.text)
+        raise RuntimeError(f"print design still has problems after {MAX_LAYOUT_FIXES} fixes: {problems[:3]}")
+
+    @staticmethod
+    def _contrast_problems(item, png: bytes, colors: list[str]) -> list[str]:
+        weak = [c for c in colors if merch.contrast(item, png, c) < 0.22]
+        if colors and len(weak) == len(colors):
+            return [f"the ink colours barely show on every chosen blank ({', '.join(weak)}); change the ink colours "
+                    "or the blank colours"]
+        return []
+
+    def _photo(self, session, product: Product, images, flat: Image.Image, item, color: str) -> Image.Image | None:
+        if not (images.is_real and self.settings.mockup_scenes):
+            return None
+        noun = "mug" if item.product_type == "mug" else f"{color.lower()} {item.label.lower()}"
+        prompt = (f"Professional Etsy product photo of this exact {noun}. Keep the printed design EXACTLY as it is: "
+                  "same words, spelling, colours, layout and position; do not add, remove or redraw anything in the print. "
+                  + ("Place the mug on a styled table with soft morning light, a few tasteful props, shallow depth of field."
+                     if item.product_type == "mug" else
+                     "Show it as a neat flat lay on a light wooden surface with soft natural light and a couple of "
+                     "tasteful props, realistic fabric texture and folds.")
+                  + " No people, no other text, no logos, no watermark.")
+        try:
+            gen = images.edit(prompt, merch.to_png(flat),
+                              size=(1024, 1024), quality=self.settings.mockup_quality)
+        except Exception as e:  # noqa: BLE001 - a photo is a bonus; the exact mockup is always there
+            self.log.warning("photo mockup failed; using the flat mockup", error=str(e)[:200])
+            return None
+        product.add_cost(gen.cost_usd)
+        self.record_cost(session, gen.cost_usd, kind="image")
+        return mockups.load(gen.data)
+
+    def _create_merch(self, session, product: Product, brief: dict, plan: dict, palette: list[str], title: str,
+                      base: str, slug: str, storage, images, files: list[str], imgs: list[str], note: str,
+                      scene_key: int) -> dict:
+        import base64
+
+        catalog = get_catalog()
+        spec = dict(plan.get("merch_spec") or {})
+        item = catalog.get(spec.get("item") or brief.get("item"))
+        if item is None or item.product_type != product.product_type:
+            options = [i.key for i in catalog.for_type(product.product_type)]
+            if not options:
+                raise RuntimeError(f"catalog.yaml has no items for {product.product_type}")
+            item = catalog.get(options[0])
+        spec["item"] = item.key
+        spec["colors"] = [c for c in spec.get("colors") or [] if c in item.colors][:8] or list(item.colors)[:4]
+        pers = spec.get("personalization") or {}
+        fields = [f for f in pers.get("fields") or [] if isinstance(f, dict) and re.fullmatch(r"[a-z_][a-z0-9_]*", str(f.get("key", "")))]
+        spec["personalization"] = {**pers, "enabled": bool(pers.get("enabled") and fields), "fields": fields[:3]}
+
+        art = self._merch_art(session, product, spec, images)
+        art_path = storage.put(f"{base}/source/art.png", art, "image/png") if art else None
+        art_uri = f"data:image/png;base64,{base64.b64encode(art).decode()}" if art else None
+        html, sample = self._design_merch(session, product, spec, item, art_uri, note)
+        hits = get_blocklist().check_many(re.sub(r"<[^>]+>", " ", html))
+        if hits:
+            raise RuntimeError(f"blocklist hit in design text: {hits}")
+        # keep only blank colours the design actually reads on
+        spec["colors"] = [c for c in spec["colors"] if merch.contrast(item, sample.png, c) >= 0.22] or spec["colors"]
+        template = storage.put(f"{base}/source/design.html", html.encode("utf-8"), "text/html")
+        personalised = spec["personalization"]["enabled"]
+        name = f"print-{slug}-{'example' if personalised else 'final'}.png"
+        files.append(storage.put(f"{base}/{name}", sample.png, "image/png"))
+
+        hero = merch.best_contrast_color(item, sample.png, spec["colors"])
+        flat = merch.mockup(item, sample.png, hero)
+        photo = self._photo(session, product, images, flat, item, hero)
+        imgs.append(storage.put(f"{base}/listing-01-primary.png",
+                                mockups.primary_image(photo or flat, bg="#F3F0EB"), "image/png"))
+        if photo:
+            imgs.append(storage.put(f"{base}/listing-02-mockup.png", merch.to_png(flat), "image/png"))
+        if len(spec["colors"]) > 1:
+            imgs.append(storage.put(f"{base}/listing-03-colours.png",
+                                    merch.to_png(merch.color_chart(item, sample.png, spec["colors"])), "image/png"))
+        imgs.append(storage.put(f"{base}/listing-04-closeup.png",
+                                merch.to_png(merch.design_closeup(sample.png, item.colors[hero])), "image/png"))
+        days = catalog.processing_days
+        if personalised:
+            how = [f"{f.get('label') or f['key']}: up to {f.get('max_chars', 20)} characters (e.g. {f.get('example', '')})"
+                   for f in spec["personalization"]["fields"]]
+            how += ["Type it in the personalisation box at checkout", "We double-check spelling before printing"]
+            imgs.append(storage.put(f"{base}/listing-05-personalise.png", self._card(
+                title, how, palette, kicker="How to personalise", foot="Every order is printed just for you"), "image/png"))
+        details = [item.label, item.material, f"{item.method} print, made to order",
+                   f"Sizes: {', '.join(item.sizes)}" if len(item.sizes) > 1 else f"Size: {item.sizes[0]}",
+                   f"Ships in {days[0]}-{days[-1]} business days", "Printed by our family print shop"]
+        imgs.append(storage.put(f"{base}/listing-06-details.png", self._card(
+            title, details, palette, kicker="Product details", foot="Made to order · ships from Arizona"), "image/png"))
+        return {**plan, "merch_spec": spec, "merch": {
+            "item": item.key, "template": template, "art": art_path, "print_px": [sample.width_px, sample.height_px],
+            "dpi": catalog.min_dpi, "hero_color": hero, "example_values": {
+                str(f["key"]): str(f.get("example") or "") for f in spec["personalization"]["fields"]}}}
+
     # ------------------------------------------------------------------ main
     def _create_one(self, session, product: Product, storage, blocklist, images) -> None:
         full = dict(product.brief_json or {})
@@ -215,6 +363,9 @@ class CreatorAgent(Agent):
             if comments and not full.get("revision") else ""
         user = (f"Brief:\n{json.dumps({**brief, 'product_type': product.product_type}, indent=2)}{mock_hint}"
                 f"{revision_note(full)}{owner_notes}")
+        if product.product_type in ProductType.PHYSICAL:
+            items = [i.summary() for i in get_catalog().for_type(product.product_type)]
+            user += f"\n\nCatalog items you may use for this product (`merch_spec.item`):\n{json.dumps(items, indent=1)}"
         result = self.ask(session, task="creator_plan", model=self.settings.model_worker, user=user,
                           max_tokens=16000)
         try:
@@ -228,7 +379,7 @@ class CreatorAgent(Agent):
         product.add_cost(result.cost_usd)
 
         hits = blocklist.check_many(plan.get("image_prompt"), plan.get("title_hint"), json.dumps(plan.get("planner_spec") or {}),
-                                    json.dumps(plan.get("spreadsheet_spec") or {}))
+                                    json.dumps(plan.get("spreadsheet_spec") or {}), json.dumps(plan.get("merch_spec") or {}))
         if hits:
             raise RuntimeError(f"blocklist hit in creator plan: {hits}")
 
@@ -342,6 +493,9 @@ class CreatorAgent(Agent):
             included += ["Dropdowns you can customise", "Formulas and totals built in",
                          "Opens in Excel and Google Sheets", "Example entries to show how it works"]
             imgs.append(storage.put(f"{base}/listing-06-included.png", self._card(title, included, palette), "image/png"))
+        elif product.product_type in ProductType.PHYSICAL:
+            plan = self._create_merch(session, product, brief, plan, palette, title, base, slug, storage, images,
+                                      files, imgs, revision_note(full) + owner_notes, scene_key)
         else:
             raise RuntimeError(f"product_type {product.product_type} is Phase 2 (POD) and not implemented in v1")
 

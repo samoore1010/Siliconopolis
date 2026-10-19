@@ -14,6 +14,7 @@ from .base import (
     EtsyClient,
     ListingSearchResult,
     ListingStats,
+    OrderLine,
     Receipt,
     TaxonomyNode,
     assert_draft_only,
@@ -142,6 +143,38 @@ class MockEtsyClient(EtsyClient):
         listing.update(payload)
         self._save()
         return DraftListing(listing_id=listing_id, state=listing["state"], title=listing.get("title", ""), raw=listing)
+
+    # ---------------------------------------------------------------- orders
+    def add_mock_order(self, listing_id: str, *, variations: dict[str, str] | None = None, personalization: str = "",
+                       quantity: int = 1, ship_to: dict[str, str] | None = None) -> OrderLine:
+        """Simulate a buyer order (tests and the demo command)."""
+        n = len(self._state.setdefault("orders", [])) + 1
+        line = {"receipt_id": str(900000 + n), "transaction_id": str(800000 + n), "listing_id": str(listing_id),
+                "title": self._state["listings"].get(str(listing_id), {}).get("title", "Mock product"),
+                "quantity": quantity, "variations": variations or {}, "personalization": personalization,
+                "ship_to": ship_to or {"name": "Sam Buyer", "first_line": "123 Main St", "second_line": "",
+                                       "city": "Phoenix", "state": "AZ", "zip": "85001", "country_iso": "US"},
+                "created_at": datetime.now(UTC).isoformat(), "buyer_note": "", "shipped": False}
+        self._state["orders"].append(line)
+        self._save()
+        return OrderLine(**{k: v for k, v in line.items() if k != "shipped"})
+
+    def get_open_orders(self, *, min_created: int | None = None) -> list[OrderLine]:
+        return [OrderLine(**{k: v for k, v in o.items() if k != "shipped"})
+                for o in self._state.get("orders", []) if not o.get("shipped")]
+
+    def update_listing_inventory(self, listing_id: str, inventory: dict[str, Any]) -> dict[str, Any]:
+        listing = self._require(listing_id)
+        listing["inventory"] = inventory
+        self._save()
+        return inventory
+
+    def create_receipt_shipment(self, receipt_id: str, *, carrier: str, tracking_code: str) -> dict[str, Any]:
+        for o in self._state.get("orders", []):
+            if o["receipt_id"] == str(receipt_id):
+                o.update({"shipped": True, "carrier": carrier, "tracking_code": tracking_code})
+        self._save()
+        return {"receipt_id": receipt_id, "tracking_code": tracking_code}
 
     def ping(self) -> None:
         return None

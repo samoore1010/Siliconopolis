@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import atexit
 import re
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
@@ -81,34 +82,34 @@ def wrap(html: str, page: str = "letter", landscape: bool = False) -> str:
     return f"<!doctype html><html><head><meta charset='utf-8'>{base}</head><body>{html}</body></html>"
 
 
-_BROWSER = None
-_PW = None
+_LOCAL = threading.local()  # Playwright's sync API is bound to the thread that started it
 
 
 def _browser():
-    """One headless Chromium per process (launching costs ~1s; agents render many pages per run)."""
-    global _BROWSER, _PW
-    if _BROWSER is None or not _BROWSER.is_connected():
+    """One headless Chromium per thread (launching costs ~1s; agents render many pages per run).
+    The web service renders from worker threads, so each thread gets its own instance."""
+    browser = getattr(_LOCAL, "browser", None)
+    if browser is None or not browser.is_connected():
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as e:  # pragma: no cover
             raise RenderError("playwright is not installed; run `pip install playwright && playwright install chromium`") from e
-        _PW = sync_playwright().start()
-        _BROWSER = _PW.chromium.launch(args=["--disable-gpu", "--no-sandbox"])
-        atexit.register(close_browser)
-    return _BROWSER
+        _LOCAL.pw = sync_playwright().start()
+        _LOCAL.browser = _LOCAL.pw.chromium.launch(args=["--disable-gpu", "--no-sandbox"])
+        if threading.current_thread() is threading.main_thread():
+            atexit.register(close_browser)
+    return _LOCAL.browser
 
 
 def close_browser() -> None:
-    global _BROWSER, _PW
     try:
-        if _BROWSER is not None:
-            _BROWSER.close()
-        if _PW is not None:
-            _PW.stop()
+        if getattr(_LOCAL, "browser", None) is not None:
+            _LOCAL.browser.close()
+        if getattr(_LOCAL, "pw", None) is not None:
+            _LOCAL.pw.stop()
     except Exception:  # noqa: BLE001
         pass
-    _BROWSER = _PW = None
+    _LOCAL.browser = _LOCAL.pw = None
 
 
 @contextmanager
@@ -191,3 +192,106 @@ def chromium_available() -> bool:
         return True
     except Exception:  # noqa: BLE001
         return False
+
+
+# ---------------------------------------------------------------------------------------------- print files
+_PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
+
+PRINT_CSS = """
+html, body { margin: 0; padding: 0; background: transparent !important; }
+* { box-sizing: border-box; }
+.design { width: %(w)sin; height: %(h)sin; position: relative; overflow: hidden; background: transparent; }
+[data-fit] { display: block; white-space: nowrap; }
+"""
+
+# Trusted code (not model-written): shrink personalised text until it fits its box.
+_FIT_JS = """
+() => {
+  const area = document.querySelector('.design');
+  if (!area) return {ok: false, problems: ['no element with class="design"']};
+  const ar = area.getBoundingClientRect();
+  const problems = [];
+  document.querySelectorAll('[data-fit]').forEach(el => {
+    let fs = parseFloat(getComputedStyle(el).fontSize), min = Math.max(6, fs * 0.3);
+    const over = () => el.scrollWidth > el.clientWidth + 1 || el.getBoundingClientRect().right > ar.right + 1
+      || el.getBoundingClientRect().left < ar.left - 1;
+    while (over() && fs > min) { fs -= Math.max(1, fs * 0.04); el.style.fontSize = fs + 'px'; }
+    if (over()) problems.push(`personalised text "${el.textContent.trim().slice(0, 30)}" does not fit even at minimum size`);
+  });
+  area.querySelectorAll('*').forEach(el => {
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const text = [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim());
+    if (text && (r.right > ar.right + 1 || r.bottom > ar.bottom + 1 || r.left < ar.left - 1 || r.top < ar.top - 1))
+      problems.push(`text "${el.textContent.trim().slice(0, 30)}" crosses the edge of the print area`);
+  });
+  const leftovers = (document.body.innerText.match(/\\{\\{[^}]*\\}\\}/g) || []);
+  if (leftovers.length) problems.push('unfilled placeholders: ' + leftovers.join(', '));
+  return {ok: problems.length === 0, problems: [...new Set(problems)].slice(0, 10)};
+}
+"""
+
+
+def fill_template(html: str, values: dict[str, str], *, art_uri: str | None = None) -> str:
+    """Substitute {{field}} placeholders (HTML-escaped) and {{art}} (generated artwork data URI)."""
+    import html as html_lib
+
+    def sub(m: re.Match) -> str:
+        key = m.group(1)
+        if key == "art":
+            return art_uri or ""
+        return html_lib.escape(str(values[key])) if key in values else m.group(0)
+
+    return _PLACEHOLDER_RE.sub(sub, html)
+
+
+def wrap_print(html: str, width_in: float, height_in: float) -> str:
+    css = "<style>" + PRINT_CSS % {"w": width_in, "h": height_in} + "</style>"
+    html = sanitize(html)
+    if re.search(r"<head[^>]*>", html, re.IGNORECASE):
+        return re.sub(r"(<head[^>]*>)", r"\1<meta charset='utf-8'>" + css, html, count=1, flags=re.IGNORECASE)
+    return f"<!doctype html><html><head><meta charset='utf-8'>{css}</head><body>{html}</body></html>"
+
+
+@dataclass
+class PrintRender:
+    png: bytes
+    problems: list[str]
+    width_px: int
+    height_px: int
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems
+
+
+def render_print_file(html: str, *, width_in: float, height_in: float, dpi: int = 300,
+                      values: dict[str, str] | None = None, art_uri: str | None = None) -> PrintRender:
+    """Render a merch design to a transparent PNG at print resolution (e.g. 11x13 in @300 dpi = 3300x3900)."""
+    import io
+
+    from PIL import Image
+
+    filled = fill_template(html, values or {}, art_uri=art_uri)
+    css_w, css_h = round(width_in * 96), round(height_in * 96)
+    with _page(viewport=(css_w, css_h), scale=dpi / 96) as pg:
+        pg.set_content(wrap_print(filled, width_in, height_in), wait_until="load")
+        pg.evaluate("document.fonts && document.fonts.ready")
+        report = pg.evaluate(_FIT_JS)
+        el = pg.query_selector(".design")
+        if el is None:
+            raise RenderError('design has no element with class="design"')
+        png = el.screenshot(type="png", omit_background=True)
+    img = Image.open(io.BytesIO(png))
+    problems = list(report.get("problems") or [])
+    alpha = img.convert("RGBA").getchannel("A")
+    box = alpha.point(lambda v: 255 if v > 10 else 0).getbbox()
+    if not box:
+        problems.append("the design is empty (nothing would print)")
+    else:
+        wide, tall = (box[2] - box[0]) / img.width, (box[3] - box[1]) / img.height
+        if wide < 0.3 and tall < 0.3:
+            problems.append(f"the design only uses {wide:.0%} x {tall:.0%} of the print area; make it larger")
+    if alpha.getextrema()[0] > 250:
+        problems.append("the design has a solid background; the background must be transparent")
+    return PrintRender(png=png, problems=problems, width_px=img.width, height_px=img.height)

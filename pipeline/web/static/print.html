@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Print Queue</title>
+  <link rel="stylesheet" href="/static/print.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo">◆</span> Print queue</div>
+    <nav class="views" role="tablist">
+      <button data-view="open" class="on">To do <span id="n-open"></span></button>
+      <button data-view="shipped">Shipped <span id="n-shipped"></span></button>
+      <button data-view="all">All</button>
+    </nav>
+  </header>
+  <main>
+    <section class="ledger" id="ledger"></section>
+    <p class="hint">New orders appear here within the hour. Download the print file, print it, then enter the tracking number; the buyer is notified through Etsy automatically.</p>
+    <div id="orders"></div>
+    <p class="empty" id="empty" hidden>Nothing to print right now. 🎉</p>
+  </main>
+  <div class="lightbox" id="lightbox" hidden><img alt="Proof"></div>
+  <script src="/static/print.js"></script>
+</body>
+</html>

@@ -1,0 +1,107 @@
+# In-house physical products, printed and shipped by our production partner (the family print shop).
+# The agents only design products listed here, in the colours and sizes listed here.
+# TODO(owner): confirm blanks, colours, sizes, costs, prices and turnaround with the shop.
+#   unit_cost  = what we pay the shop per item (blank + ink + labour)   -> owed to the shop per order
+#   ship_cost  = typical postage + packaging (used for margin estimates only; Etsy shipping profile charges the buyer)
+#   price      = default Etsy price; size_upcharge adds to it for bigger sizes
+production_partner:
+  name: Family print shop            # TODO(owner): the shop's name as set up in Etsy > Production partners
+  location: Phoenix, Arizona          # TODO(owner)
+  processing_days: [2, 5]             # made-to-order turnaround promised to buyers
+  min_dpi: 300
+
+items:
+  tshirt:
+    product_type: apparel
+    label: Unisex T-shirt
+    blank: Unisex soft cotton tee (Bella+Canvas 3001 or equivalent)
+    method: DTF transfer
+    material: 100% combed ring-spun cotton (heathers are cotton/poly)
+    sizes: [S, M, L, XL, 2XL, 3XL]
+    size_upcharge: {2XL: 3, 3XL: 4}
+    colors:
+      White: "#FFFFFF"
+      Black: "#1C1C1E"
+      Heather Gray: "#B4B5B8"
+      Natural: "#EEE6D3"
+      Navy: "#1F2A44"
+      Sage: "#A3AE94"
+      Pink: "#F2C9CF"
+    print_area: {name: Front, width_in: 11, height_in: 13}
+    unit_cost: 9.50
+    ship_cost: 5.00
+    price: 26.00
+    mockup: {kind: shirt, box: [0.335, 0.27, 0.33, 0.39]}
+
+  crewneck:
+    product_type: apparel
+    label: Crewneck Sweatshirt
+    blank: Unisex midweight crewneck (Gildan 18000 or equivalent)
+    method: DTF transfer
+    material: 50% cotton / 50% polyester fleece
+    sizes: [S, M, L, XL, 2XL, 3XL]
+    size_upcharge: {2XL: 4, 3XL: 5}
+    colors:
+      White: "#FFFFFF"
+      Black: "#1C1C1E"
+      Sport Gray: "#A9AAAD"
+      Sand: "#D9CBB0"
+      Navy: "#1F2A44"
+      Maroon: "#5B1F2B"
+      Light Pink: "#F1CED3"
+    print_area: {name: Front, width_in: 11, height_in: 11}
+    unit_cost: 15.00
+    ship_cost: 6.50
+    price: 38.00
+    mockup: {kind: sweatshirt, box: [0.345, 0.28, 0.31, 0.32]}
+
+  hoodie:
+    product_type: apparel
+    label: Hooded Sweatshirt
+    blank: Unisex midweight hoodie (Gildan 18500 or equivalent)
+    method: DTF transfer
+    material: 50% cotton / 50% polyester fleece
+    sizes: [S, M, L, XL, 2XL, 3XL]
+    size_upcharge: {2XL: 4, 3XL: 5}
+    colors:
+      White: "#FFFFFF"
+      Black: "#1C1C1E"
+      Sport Gray: "#A9AAAD"
+      Sand: "#D9CBB0"
+      Navy: "#1F2A44"
+      Forest: "#2D4434"
+    print_area: {name: Front, width_in: 11, height_in: 10}
+    unit_cost: 19.00
+    ship_cost: 7.50
+    price: 45.00
+    mockup: {kind: hoodie, box: [0.345, 0.34, 0.31, 0.27]}
+
+  mug11:
+    product_type: mug
+    label: 11 oz Ceramic Mug
+    blank: White ceramic sublimation mug, 11 oz
+    method: Sublimation
+    material: Glossy white ceramic, dishwasher and microwave safe
+    sizes: [11 oz]
+    colors:
+      White: "#FFFFFF"
+    print_area: {name: Wrap, width_in: 8.5, height_in: 3.5}
+    unit_cost: 6.00
+    ship_cost: 7.00
+    price: 19.00
+    mockup: {kind: mug, box: [0.20, 0.27, 0.48, 0.47], visible: 0.42}
+
+  mug15:
+    product_type: mug
+    label: 15 oz Ceramic Mug
+    blank: White ceramic sublimation mug, 15 oz
+    method: Sublimation
+    material: Glossy white ceramic, dishwasher and microwave safe
+    sizes: [15 oz]
+    colors:
+      White: "#FFFFFF"
+    print_area: {name: Wrap, width_in: 8.5, height_in: 4.0}
+    unit_cost: 7.50
+    ship_cost: 8.00
+    price: 22.00
+    mockup: {kind: mug, box: [0.20, 0.25, 0.48, 0.50], visible: 0.42}

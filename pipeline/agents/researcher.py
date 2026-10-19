@@ -115,8 +115,16 @@ class ResearcherAgent(Agent):
                 self.etsy_search_ok = False
                 self.log.warning("etsy search unavailable; researching from niche keywords only this run",
                                  keyword=kw, error=str(e)[:200])
+        catalog_note = ""
+        physical = [t for t in niche.get("product_types") or [] if t in ProductType.PHYSICAL]
+        if physical:
+            from pipeline.catalog import get_catalog
+
+            items = [i.summary() for t in physical for i in get_catalog().for_type(t)]
+            catalog_note = (f"In-house products our print shop can make (each physical brief must name one `item`):\n"
+                            f"{json.dumps(items, indent=1)}\n\n")
         user = (
-            f"{self.directives_block}"
+            f"{self.directives_block}{catalog_note}"
             f"Niche config:\n{json.dumps({'niche': niche.get('name'), 'product_types': niche.get('product_types'), 'notes': niche.get('notes')}, indent=2)}\n\n"
             f"Recent analyst/research notes:\n{self.notes_text}\n\n"
             f"Demand signals from Etsy listing search (use only for keywords/price/popularity, never copy):\n"

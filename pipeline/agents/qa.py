@@ -88,6 +88,14 @@ class QAAgent(Agent):
         if not product.image_paths:
             return {"pass": False, "reasons": ["no listing images"], "scores": {}, "checks": {"images": "missing"}}
         primary = storage.get(product.image_paths[0])
+        if product.product_type in ProductType.PHYSICAL and product.file_paths:
+            # mockups share the same blank silhouette; compare the designs themselves
+            art = Image.open(io.BytesIO(storage.get(product.file_paths[0]))).convert("RGBA")
+            flat = Image.new("RGBA", art.size, (255, 255, 255, 255))
+            flat.alpha_composite(art)
+            buf = io.BytesIO()
+            flat.convert("RGB").save(buf, "PNG")
+            primary = buf.getvalue()
         product.phash = compute_phash(primary)
         others = session.execute(
             select(Product.id, Product.phash).where(Product.id != product.id, Product.phash.is_not(None),
@@ -171,6 +179,27 @@ class QAAgent(Agent):
                 if not pages:
                     return {"ok": False, "errors": ["PDF has no pages"]}, [], "the PDF"
                 return {"ok": True, "pages": len(pages)}, pages, "the pages of the delivered PDF (US Letter)"
+            if product.product_type in ProductType.PHYSICAL:
+                from pipeline.catalog import get_catalog
+                from pipeline.generators import merch
+
+                data = storage.get(first)
+                img = Image.open(io.BytesIO(data))
+                item = get_catalog().get((plan.get("merch") or {}).get("item"))
+                errors = []
+                if item:
+                    need_w, need_h = item.print_px
+                    if img.width < need_w * 0.98 or img.height < need_h * 0.98:
+                        errors.append(f"print file is {img.width}x{img.height}px; {item.label} needs "
+                                      f"{need_w}x{need_h}px ({get_catalog().min_dpi} dpi)")
+                if img.mode != "RGBA" or img.getchannel("A").getextrema()[0] > 250:
+                    errors.append("print file has no transparent background")
+                check = {"ok": not errors, "errors": errors, "size_px": [img.width, img.height]}
+                hero = (plan.get("merch") or {}).get("hero_color")
+                views = [data] + ([merch.to_png(merch.design_closeup(data, item.colors[hero]))]
+                                  if item and hero in item.colors else [])
+                return check, views, ("the print file exactly as it will be printed (transparent background), then "
+                                      "the same file on the blank colour")
             if first.endswith(".png"):
                 return {"ok": True}, [storage.get(first)], "the delivered print file"
         except Exception as e:  # noqa: BLE001

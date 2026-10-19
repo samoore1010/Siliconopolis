@@ -113,7 +113,7 @@ def test_village_endpoints_open_in_local_without_auth(client, brief_factory):
     main(["run", "creator"])
     assert client.get("/village").status_code == 200 and "<canvas" in client.get("/village").text
     s = client.get("/api/village/state").json()
-    assert s["queue"]["created"] == 1 and len(s["agents"]) == 5 and s["env"]["mode"] == "mock"
+    assert s["queue"]["created"] == 1 and len(s["agents"]) == 6 and s["env"]["mode"] == "mock"
     assert s["run_now_enabled"] is False
     ev = client.get("/api/village/events").json()
     assert ev["events"] and ev["last_id"] == s["last_event_id"]

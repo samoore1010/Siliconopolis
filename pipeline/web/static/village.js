@@ -44,11 +44,12 @@ const AGENTS = {
   qa:         { shirt: "c", hair: "#1b1b24", label: "QA",         gx: 8.6, gy: 4.4, color: "#f3c34f" },
   lister:     { shirt: "b", hair: "#d9b36b", label: "Lister",     gx: 6.3, gy: 7.6, color: "#6fd38a" },
   analyst:    { shirt: "e", hair: "#5a3d6b", label: "Analyst",    gx: 0.6, gy: 6.0, color: "#b48cff" },
+  fulfiller:  { shirt: "a", hair: "#a0522d", label: "Fulfiller",  gx: 3.9, gy: 8.9, color: "#ffb36b" },
 };
 const BRAIN = { gx: 4.6, gy: 4.6 };
 const OUTBOX = { gx: 8.8, gy: 7.6 };
 const BIN = { gx: 9.2, gy: 2.0 };
-const ORDER = ["researcher", "creator", "qa", "lister", "analyst"];
+const ORDER = ["researcher", "creator", "qa", "lister", "analyst", "fulfiller"];
 
 function drawSprite(rows, x, y, scale, overrides) {
   for (let r = 0; r < rows.length; r++) for (let c = 0; c < rows[r].length; c++) {

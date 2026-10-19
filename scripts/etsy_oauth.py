@@ -30,7 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 AUTH_URL = "https://www.etsy.com/oauth/connect"
 TOKEN_URL = "https://api.etsy.com/v3/public/oauth/token"
-SCOPES = ["listings_r", "listings_w", "listings_d", "shops_r", "transactions_r"]
+# transactions_w: send tracking numbers for in-house (printed) orders back to Etsy
+SCOPES = ["listings_r", "listings_w", "listings_d", "shops_r", "transactions_r", "transactions_w"]
 
 
 def _pkce_pair() -> tuple[str, str]:

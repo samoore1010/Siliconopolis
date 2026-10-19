@@ -114,8 +114,16 @@ export default defineRailway((ctx) => {
     env,
   });
 
+  // Hourly: turn new shirt/mug orders into print jobs and send tracking back to Etsy.
+  const fulfiller = service("fulfiller", {
+    source,
+    start: "python -m pipeline run fulfiller",
+    deploy: { cronSchedule: "0 * * * *", restartPolicyType: "NEVER" },
+    env,
+  });
+
   const data = group("Data", [db, storage]);
-  const agents = group("Agents", [researcher, daily, analyst]);
+  const agents = group("Agents", [researcher, daily, analyst, fulfiller]);
 
   return project("etsy-agent-pipeline", {
     resources: [data, web, agents],
