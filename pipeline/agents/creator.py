@@ -22,8 +22,15 @@ from pipeline.db.locking import claim_products, release, transition
 from pipeline.db.models import OwnerNote, OwnerNoteKind, Product, ProductState, ProductType
 from pipeline.generators import mockups, office, render
 from pipeline.generators.pdf import image_to_pdf
-from pipeline.generators.xlsx import (SpreadsheetError, preview_html, render_spreadsheet, sheet_snapshots, spec_problems,
-                                      validate_xlsx, window_html)
+from pipeline.generators.xlsx import (
+    SpreadsheetError,
+    preview_html,
+    render_spreadsheet,
+    sheet_snapshots,
+    spec_problems,
+    validate_xlsx,
+    window_html,
+)
 from pipeline.guardrails import CapReached, get_blocklist
 from pipeline.llm import LLMError
 from pipeline.storage import get_storage

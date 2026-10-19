@@ -8,8 +8,13 @@ import pytest
 from openpyxl import load_workbook
 
 from pipeline.generators import office
-from pipeline.generators.xlsx import (SpreadsheetError, render_spreadsheet, sanitize_formula, spec_problems,
-                                      validate_xlsx)
+from pipeline.generators.xlsx import (
+    SpreadsheetError,
+    render_spreadsheet,
+    sanitize_formula,
+    spec_problems,
+    validate_xlsx,
+)
 
 needs_lo = pytest.mark.skipif(not office.available(), reason="LibreOffice not installed")
 

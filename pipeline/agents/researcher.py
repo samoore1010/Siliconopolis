@@ -11,7 +11,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pipeline.adapters.etsy import get_etsy_client
-from pipeline.db.models import OwnerNote, OwnerNoteKind, Product, ProductState, ProductType, ResearchNote, utcnow
+from pipeline.db.models import (
+    OwnerNote,
+    OwnerNoteKind,
+    Product,
+    ProductState,
+    ProductType,
+    ResearchNote,
+    utcnow,
+)
 from pipeline.guardrails import CapReached, get_blocklist
 from pipeline.guardrails.caps import remaining_weekly_briefs
 

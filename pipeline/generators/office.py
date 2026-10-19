@@ -85,8 +85,8 @@ def trim(png: bytes, *, pad: int = 24, bg: tuple[int, int, int] = (255, 255, 255
     box = diff.point(lambda v: 255 if v > 12 else 0).getbbox()
     if not box:
         return png
-    l, t, r, b = box
-    img = img.crop((max(0, l - pad), max(0, t - pad), min(img.width, r + pad), min(img.height, b + pad)))
+    left, top, right, bottom = box
+    img = img.crop((max(0, left - pad), max(0, top - pad), min(img.width, right + pad), min(img.height, bottom + pad)))
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return buf.getvalue()

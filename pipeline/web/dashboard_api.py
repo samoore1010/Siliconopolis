@@ -21,10 +21,18 @@ from sqlalchemy import func, select
 
 from pipeline.config import get_settings
 from pipeline.db import session_scope
-from pipeline.db.events import EventKind
-from pipeline.db.events import record_event
+from pipeline.db.events import EventKind, record_event
 from pipeline.db.locking import transition
-from pipeline.db.models import Event, OwnerNote, OwnerNoteKind, Product, ProductState, ResearchNote, Run, utcnow
+from pipeline.db.models import (
+    Event,
+    OwnerNote,
+    OwnerNoteKind,
+    Product,
+    ProductState,
+    ResearchNote,
+    Run,
+    utcnow,
+)
 from pipeline.generators.mockups import short_title
 from pipeline.guardrails.caps import briefs_this_week, drafts_today, todays_spend
 from pipeline.storage import get_storage

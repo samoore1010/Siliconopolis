@@ -146,7 +146,7 @@ def _hex(c: str | None, default: str) -> str:
 def _mix(hex_a: str, hex_b: str, t: float) -> str:
     a = [int(hex_a[i:i + 2], 16) for i in (0, 2, 4)]
     b = [int(hex_b[i:i + 2], 16) for i in (0, 2, 4)]
-    return "".join(f"{round(x + (y - x) * t):02X}" for x, y in zip(a, b))
+    return "".join(f"{round(x + (y - x) * t):02X}" for x, y in zip(a, b, strict=True))
 
 
 def _luma(hex_c: str) -> float:
@@ -930,7 +930,7 @@ def sheet_snapshots(spec: dict[str, Any], *, palette: list[str] | None = None) -
     data = render_spreadsheet(spec, palette=palette, snapshot=True)
     names = load_workbook(io.BytesIO(data), read_only=True).sheetnames
     pages = office.pdf_to_pngs(office.convert(data, "xlsx", "pdf"), scale=2.0, max_pages=len(names))
-    return {name: office.trim(png) for name, png in zip(names, pages)}
+    return {name: office.trim(png) for name, png in zip(names, pages, strict=False)}
 
 
 # ---------------------------------------------------------------------------------------------- previews
