@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     # images
     image_provider: str = Field("mock", alias="IMAGE_PROVIDER")
     image_api_key: str = Field("", alias="IMAGE_API_KEY")
+    image_model: str = Field("gpt-image-1.5", alias="IMAGE_MODEL")
+    image_quality: Literal["low", "medium", "high"] = Field("high", alias="IMAGE_QUALITY")
+    # lifestyle mockup backgrounds (cached and reused, so this is a one-off cost per scene)
+    mockup_scenes: bool = Field(True, alias="MOCKUP_SCENES")
+    mockup_quality: Literal["low", "medium", "high"] = Field("medium", alias="MOCKUP_QUALITY")
 
     # caps
     daily_draft_cap: int = Field(10, alias="DAILY_DRAFT_CAP")

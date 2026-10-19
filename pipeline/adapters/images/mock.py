@@ -21,7 +21,7 @@ def _font(size: int):
 class MockImageProvider(ImageProvider):
     name = "mock"
 
-    def generate(self, prompt, *, size=(1024, 1024), style=None, negative_prompt=None) -> GeneratedImage:
+    def generate(self, prompt, *, size=(1024, 1024), style=None, negative_prompt=None, quality=None) -> GeneratedImage:
         w, h = size
         seed = hashlib.md5(prompt.encode()).digest()
         bg = (235 + seed[0] % 20, 230 + seed[1] % 20, 220 + seed[2] % 25)

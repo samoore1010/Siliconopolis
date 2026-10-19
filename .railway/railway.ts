@@ -53,7 +53,9 @@ export default defineRailway((ctx) => {
     S3_ACCESS_KEY_ID: storage.env.ACCESS_KEY_ID,
     S3_SECRET_ACCESS_KEY: storage.env.SECRET_ACCESS_KEY,
 
-    IMAGE_PROVIDER: "mock", // TODO(owner): switch to the chosen provider at Milestone 3
+    IMAGE_PROVIDER: prod ? "openai" : "mock", // openai needs IMAGE_API_KEY (OpenAI key)
+    IMAGE_MODEL: "gpt-image-1.5",
+    IMAGE_QUALITY: "high",
 
     // Secrets: set once in the Railway dashboard per environment; never in the repo.
     ANTHROPIC_API_KEY: preserve(),
