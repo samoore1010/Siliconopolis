@@ -23,7 +23,7 @@ from sqlalchemy import func, select
 from pipeline.config import get_settings
 from pipeline.db import session_scope
 from pipeline.db.events import EventKind, record_event
-from pipeline.db.locking import transition
+from pipeline.db.locking import QUEUE_ORDER, transition
 from pipeline.db.models import (
     BriefStatus,
     Event,
@@ -69,6 +69,10 @@ class BriefIn(BaseModel):
     focus: str = Field(min_length=3, max_length=MAX_NOTE_CHARS)
     product_types: list[str] = Field(default_factory=list)
     idea_count: int = Field(6, ge=1, le=20)
+
+
+class OrderIn(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=1000)
 
 
 class DeleteIn(BaseModel):
@@ -245,13 +249,15 @@ def overview():
         need("info", "Wall art is paused", "It needs an image provider (OpenAI) to be configured.", None, None)
 
     now = datetime.now(UTC)
+    with session_scope() as s:
+        working = _working(s)
     schedule = [{"key": k, "label": label, "at": next_run(k, now).isoformat()} for k, label in (
         ("researcher", "Research run"), ("creator", "Build, review & list"), ("fulfiller", "Order check"),
         ("analyst", "Sales analysis"))]
 
     stages = [{**st, "count": counts.get(st["state"], 0)} for st in STAGES]
     return {
-        "stages": stages, "needs_you": needs, "schedule": schedule, "briefs_queued": briefs_queued,
+        "working": working, "stages": stages, "needs_you": needs, "schedule": schedule, "briefs_queued": briefs_queued,
         "activity": activity, "last_runs": last_runs,
         "orders": {k: order_counts.get(k, 0) for k in OrderStatus.ALL},
         "spend": {"today": round(spent_today, 2), "week": round(spend_week, 2), "total": round(spend_total, 2),
@@ -549,8 +555,96 @@ def add_comment(product_id: int, body: CommentIn):
             brief.pop("last_create_error", None)
             p.brief_json = brief
             p.qa_result_json = None
+            p.priority = _top_priority(s)  # your changes are built first
             transition(s, p, ProductState.BRIEF, message=f"{short_title(_title(p))}: owner requested changes")
         else:
             record_event(s, kind=EventKind.INFO, agent="owner", product_id=p.id, message=f"Owner commented: {text[:160]}")
         s.flush()
         return {"comment": _note(note), "state": p.state}
+
+
+# ---------------------------------------------------------------------------------------------- build queue & stop
+STOPPABLE = ("researcher", "creator")
+LIVE_RUN_HOURS = 6  # an unfinished run older than this crashed; don't show it as working
+
+
+def _top_priority(s) -> int:
+    lowest = s.execute(select(func.min(Product.priority)).where(Product.state == ProductState.BRIEF)).scalar()
+    return min(0, (lowest if lowest is not None else 0)) - 1
+
+
+def _working(s) -> list[dict[str, Any]]:
+    """Agents that are mid-run right now, with progress and whether Stop was pressed."""
+    since = datetime.now(UTC) - timedelta(hours=LIVE_RUN_HOURS)
+    runs = s.execute(select(Run).where(Run.ended_at.is_(None), Run.status == "running", Run.started_at >= since)
+                     .order_by(Run.started_at.desc())).scalars().all()
+    out, seen = [], set()
+    for r in runs:
+        if r.agent in seen:
+            continue
+        seen.add(r.agent)
+        current = s.execute(select(Product).where(Product.locked_by == f"{r.agent}:{r.id}")).scalars().first()
+        planned = None
+        if r.agent == "creator":
+            from pipeline.agents.creator import CreatorAgent
+
+            planned = CreatorAgent.DEFAULT_BATCH
+        out.append({"agent": r.agent, "label": AGENT_LABEL.get(r.agent, r.agent), "run_id": r.id,
+                    "started_at": _aware(r.started_at).isoformat(), "items": r.items_processed, "planned": planned,
+                    "current": {"id": current.id, "title": short_title(_title(current))} if current else None,
+                    "stoppable": r.agent in STOPPABLE, "stop_requested": bool(r.stop_requested_at)})
+    return out
+
+
+@router.get("/queue")
+def build_queue():
+    """Ideas waiting for the Creator, in the order they will be built."""
+    from pipeline.agents.creator import CreatorAgent
+
+    with session_scope() as s:
+        building = s.execute(select(Product).where(Product.state == ProductState.BRIEF,
+                                                   Product.locked_by.like("creator:%"))).scalars().all()
+        waiting = s.execute(select(Product).where(Product.state == ProductState.BRIEF, Product.locked_by.is_(None))
+                            .order_by(*QUEUE_ORDER)).scalars().all()
+        creator = next((w for w in _working(s) if w["agent"] == "creator"), None)
+        return {"building": [_card(p) for p in building], "queue": [_card(p) for p in waiting],
+                "batch_size": CreatorAgent.DEFAULT_BATCH, "creator": creator,
+                "next_build_at": next_run("creator").isoformat()}
+
+
+@router.post("/queue/order", dependencies=[Depends(require_write)])
+def reorder_queue(body: OrderIn):
+    """Set the build order: the ids given come first, in this order; anything not listed follows."""
+    with session_scope() as s:
+        rows = {p.id: p for p in s.execute(select(Product).where(Product.id.in_(body.ids),
+                                                                Product.state == ProductState.BRIEF)).scalars()}
+        order = [i for i in body.ids if i in rows]
+        for pos, pid in enumerate(order):
+            rows[pid].priority = pos
+        return {"order": order}
+
+
+@router.post("/queue/{product_id}/next", dependencies=[Depends(require_write)])
+def build_next(product_id: int):
+    with session_scope() as s:
+        p = s.get(Product, product_id)
+        if not p or p.state != ProductState.BRIEF:
+            raise HTTPException(404, "That idea isn't waiting to be built.")
+        p.priority = _top_priority(s)
+        return {"id": p.id, "priority": p.priority}
+
+
+@router.post("/agents/{agent}/stop", dependencies=[Depends(require_write)])
+def stop_agent(agent: str):
+    """Ask a running Researcher/Creator to stop: it finishes the item in hand, keeps everything done
+    so far, and ends the run. The next scheduled run happens as normal."""
+    if agent not in STOPPABLE:
+        raise HTTPException(404, "Only the Researcher and the Creator can be stopped mid-run.")
+    with session_scope() as s:
+        live = next((w for w in _working(s) if w["agent"] == agent), None)
+        if not live:
+            raise HTTPException(409, f"The {AGENT_LABEL[agent]} isn't running right now.")
+        run = s.get(Run, live["run_id"])
+        run.stop_requested_at = run.stop_requested_at or utcnow()
+        record_event(s, kind=EventKind.INFO, agent="owner", message=f"Asked the {AGENT_LABEL[agent]} to stop")
+        return {"stopping": agent, "run_id": run.id}

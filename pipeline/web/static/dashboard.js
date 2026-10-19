@@ -11,7 +11,7 @@ const AGENT_COLOR = { researcher: "#7cc4ff", creator: "#ff8fa3", qa: "#f3c34f", 
 const STATE_WORD = { working: "Working", idle: "Idle", sleeping: "Asleep", waiting_human: "Waiting on you", needs_you: "Needs you", cap_reached: "At a limit", error: "Problem", stale_lock: "Stuck" };
 const FILTERS = [
   { key: "all", label: "All", states: null },
-  { key: "ideas", label: "Ideas", states: ["brief"] },
+  { key: "ideas", label: "Build queue", states: ["brief"] },
   { key: "built", label: "Built", states: ["created"] },
   { key: "approved", label: "Approved", states: ["approved"] },
   { key: "etsy", label: "Etsy drafts", states: ["drafted"] },
@@ -100,6 +100,32 @@ function activityHTML(list, limit) {
 }
 const thumb = (p) => (p.thumb ? `background-image:url('${esc(p.thumb)}')` : "");
 
+/* ---------------------------------------------------------------- stop & working */
+async function stopAgent(agent, label) {
+  const msg = agent === "creator"
+    ? "It finishes the product it's building now, keeps everything built so far, and stops. The rest of the queue waits for the next build."
+    : "It finishes the research it's doing now, keeps the ideas it has made, and stops. The next scheduled run happens as normal.";
+  if (!(await confirmBox({ title: `Stop the ${label}?`, body: msg, ok: "Stop after this one" }))) return false;
+  try { await send("POST", `/api/dashboard/agents/${agent}/stop`); toast(`The ${label} will stop after the current item.`); return true; }
+  catch (e) { toast(e.message, true); return false; }
+}
+function workingHTML(working, onQueuePage = false) {
+  if (!working || !working.length) return "";
+  return `<div class="working">${working.map((w) => `
+    <div class="panel live" data-agent="${esc(w.agent)}"><span class="pulse"></span>
+      <div><b>${esc(w.label)} is ${w.agent === "creator" ? "building" : w.agent === "researcher" ? "researching" : "working"}</b>
+        <div class="muted small">${w.current ? `Now: <a href="#product/${w.current.id}">${esc(w.current.title)}</a> · ` : ""}${w.agent === "researcher" ? plural(w.items, "idea") + " so far" : `${w.items}${w.planned ? ` of up to ${w.planned}` : ""} done`} · started ${esc(ago(w.started_at))}${w.agent === "creator" && !onQueuePage ? ` · <a href="#products/ideas">see the queue</a>` : ""}</div></div>
+      ${w.stoppable ? (w.stop_requested ? `<span class="muted small">Stopping after this one…</span>` : `<button class="btn small" data-stop="${esc(w.agent)}">Stop after this one</button>`) : ""}
+    </div>`).join("")}</div>`;
+}
+function wireStops(root, after) {
+  $$("[data-stop]", root).forEach((b) => (b.onclick = async (e) => {
+    e.stopPropagation();
+    const label = b.dataset.stop === "creator" ? "Creator" : "Researcher";
+    if (await stopAgent(b.dataset.stop, label)) after && after();
+  }));
+}
+
 /* ---------------------------------------------------------------- shared data */
 const store = { overview: null, products: null, sel: new Set(), selecting: false, q: "", filter: "all" };
 
@@ -152,6 +178,7 @@ async function renderHome(view) {
     <div class="page-head"><div><h1>Home</h1><p id="home-sub"></p></div></div>
     <div class="home">
       <div>
+        <div id="working"></div>
         <div class="section-title" style="margin-top:0"><h2>Needs you</h2></div>
         <div class="needs" id="needs"></div>
         <div class="section-title"><h2>The office, live</h2><button class="link" id="fullscreen">Full screen</button></div>
@@ -175,10 +202,18 @@ async function renderHome(view) {
     document.body.appendChild(fs);
     $("#fs-close").onclick = () => fs.remove();
   };
-  clearInterval(renderHome.t);
-  renderHome.t = setInterval(async () => { if (current === "home") fillHome(await refreshOverview().catch(() => store.overview)); }, 30000);
+  const tick = async () => {
+    if (current !== "home") return;
+    fillHome(await refreshOverview().catch(() => store.overview));
+    renderHome.t = setTimeout(tick, store.overview?.working?.length ? 8000 : 30000);  // faster while someone is working
+  };
+  clearTimeout(renderHome.t);
+  renderHome.t = setTimeout(tick, o.working?.length ? 8000 : 30000);
 }
 function fillHome(o) {
+  $("#working").innerHTML = workingHTML(o.working);
+  if (o.working?.length) $("#working").firstElementChild.style.marginBottom = "8px";
+  wireStops($("#working"), async () => fillHome(await refreshOverview()));
   const urgent = o.needs_you.filter((n) => n.level === "action" || n.level === "review");
   $("#home-sub").textContent = urgent.length ? `${plural(urgent.length, "thing")} need${urgent.length === 1 ? "s" : ""} you. Everything else is running on schedule.`
     : "Nothing needs you right now. The team is running on schedule.";
@@ -187,7 +222,7 @@ function fillHome(o) {
         ${n.cta ? `<a class="btn ${n.level === "action" ? "primary" : ""}" href="#${esc(n.route)}">${esc(n.cta)}</a>` : "<span></span>"}</div>`).join("")
     : `<div class="panel allclear"><span class="tick">✓</span><div><b>All clear</b><div class="muted small">Decisions that need you (drafts to publish, orders to check, rejected ideas) show up here.</div></div></div>`;
   const st = Object.fromEntries(o.stages.map((s) => [s.state, s.count]));
-  const flow = [["brief", "Ideas", "ideas"], ["created", "Built", "built"], ["approved", "Approved", "approved"], ["drafted", "Etsy drafts", "etsy"], ["published", "Live on Etsy", "live"]];
+  const flow = [["brief", "Build queue", "ideas"], ["created", "Built", "built"], ["approved", "Approved", "approved"], ["drafted", "Etsy drafts", "etsy"], ["published", "Live on Etsy", "live"]];
   $("#flow").innerHTML = flow.map(([k, l, f]) => `<button data-f="${f}"><span class="n">${st[k] || 0}</span><span class="l">${l}</span></button>`).join("");
   $$("#flow button").forEach((b) => (b.onclick = () => (location.hash = `products/${b.dataset.f}`)));
   $("#flow-aside").innerHTML = st.rejected ? `${plural(st.rejected, "idea")} rejected · <a href="#products/rejected">review or clear them</a>` : "";
@@ -226,12 +261,15 @@ async function loadProducts() {
 }
 function drawProducts() {
   if (current !== "products") return;
+  const queueMode = store.filter === "ideas";
+  $("#search").hidden = queueMode; $("#select").hidden = queueMode;
   const all = store.products || [];
   const counts = Object.fromEntries(FILTERS.map((f) => [f.key, f.states ? all.filter((p) => f.states.includes(p.state)).length : all.length]));
   $("#filters").innerHTML = FILTERS.map((f) => `<button class="${store.filter === f.key ? "on" : ""}" data-f="${f.key}">${f.label}<b>${counts[f.key]}</b></button>`).join("");
   $$("#filters button").forEach((b) => (b.onclick = () => { history.replaceState(null, "", `#products/${b.dataset.f}`); store.filter = b.dataset.f; store.sel.clear(); drawProducts(); }));
   const f = FILTERS.find((x) => x.key === store.filter);
   const q = store.q.toLowerCase();
+  if (queueMode) { $("#cards").innerHTML = ""; $("#cards-empty").hidden = true; $("#selbar").hidden = true; return drawQueue(); }
   const list = all.filter((p) => (!f.states || f.states.includes(p.state)) && (!q || `${p.title} ${p.niche} ${p.one_liner}`.toLowerCase().includes(q)));
   $("#banner").innerHTML = store.filter === "rejected" && list.length ? `<div class="banner"><span>These didn't pass QA or couldn't be built. Open one to see why and ask for a rebuild, or clear them out.</span>
       <button class="btn danger" id="del-rejected">Delete all ${list.length} rejected</button></div>`
@@ -263,6 +301,65 @@ function drawProducts() {
   $("#selcount").textContent = store.sel.size ? `${plural(store.sel.size, "product")} selected` : "Tap products to select them. Etsy drafts and live listings can't be deleted here.";
   $("#sel-delete").disabled = !store.sel.size;
 }
+/* ---------------------------------------------------------------- build queue */
+async function drawQueue() {
+  const d = await api("/api/dashboard/queue");
+  if (current !== "products" || store.filter !== "ideas") return;
+  const live = d.creator;
+  const left = live ? Math.max(0, (live.planned || d.batch_size) - live.items - d.building.length) : d.batch_size;
+  const head = live
+    ? workingHTML([live], true)
+    : `<div class="banner neutral"><span>The Creator builds the top ${d.batch_size} ideas each morning, one at a time, in this order. Next build: <b>${esc(until(d.next_build_at))}</b>. Drag to reorder (or use the arrows); changes count even while it's running.</span></div>`;
+  const row = (p, i) => `
+    <li class="qrow" draggable="true" data-id="${p.id}">
+      <span class="grip" aria-hidden="true">⋮⋮</span><span class="pos">${i + 1}</span>
+      <div class="qmain"><div class="t">${esc(p.title)}</div>
+        <div class="meta"><span class="pill">${esc(p.type_label)}</span>${p.revision_pending ? `<span class="st queued">Your changes</span>` : ""}${p.from_brief ? `<span>from your brief</span>` : ""}<span>${esc(p.niche || "")}</span></div></div>
+      <span class="qacts">
+        <button class="btn small" data-a="up" aria-label="Move up" ${i === 0 ? "disabled" : ""}>↑</button>
+        <button class="btn small" data-a="down" aria-label="Move down" ${i === d.queue.length - 1 ? "disabled" : ""}>↓</button>
+        ${i ? `<button class="btn small" data-a="next">Build next</button>` : ""}
+        <button class="btn small danger" data-a="del" aria-label="Delete">Delete</button></span>
+    </li>${i === left - 1 && d.queue.length > left ? `<li class="cut">${live ? "After this run" : "Later runs"} (${d.queue.length - left} more)</li>` : ""}`;
+  $("#banner").innerHTML = `${head}
+    ${d.building.length && !live ? `<div class="section-title" style="margin-top:14px"><h2>Building now</h2></div><ul class="queue-list">${d.building.map((p) => `<li class="qrow building" data-id="${p.id}"><span class="pulse"></span><div class="qmain"><div class="t">${esc(p.title)}</div><div class="meta"><span class="pill">${esc(p.type_label)}</span><span>${esc(p.niche || "")}</span></div></div></li>`).join("")}</ul>` : ""}
+    <div class="section-title" style="margin-top:14px"><h2>Up next</h2><span class="muted small">${plural(d.queue.length, "idea")} waiting</span></div>
+    ${live && !left ? `<p class="muted small">This run is about to finish; these are built next time.</p>` : ""}
+    ${d.queue.length ? `<ol class="queue-list" id="qlist">${left === 0 ? `<li class="cut">After this run (${d.queue.length})</li>` : ""}${d.queue.map(row).join("")}</ol>` : `<div class="panel pad muted">Nothing waiting. New ideas arrive with each research run; you can also <a href="#research">brief the next run</a>.</div>`}`;
+  wireStops($("#banner"), () => drawQueue());
+  const order = () => $$("#qlist .qrow").map((li) => +li.dataset.id);
+  const save = async (ids, msg) => {
+    try { await send("POST", "/api/dashboard/queue/order", { ids }); if (msg) toast(msg); drawQueue(); }
+    catch (e) { toast(e.message, true); drawQueue(); }
+  };
+  $$("#qlist .qrow").forEach((li) => {
+    const id = +li.dataset.id;
+    li.querySelector(".qmain").onclick = () => (location.hash = `product/${id}`);
+    $$("[data-a]", li).forEach((b) => (b.onclick = async (e) => {
+      e.stopPropagation();
+      const ids = order(), i = ids.indexOf(id);
+      if (b.dataset.a === "up") { ids.splice(i, 1); ids.splice(i - 1, 0, id); return save(ids); }
+      if (b.dataset.a === "down") { ids.splice(i, 1); ids.splice(i + 1, 0, id); return save(ids); }
+      if (b.dataset.a === "next") { ids.splice(i, 1); ids.unshift(id); return save(ids, "Moved to the front: it's built next."); }
+      if (b.dataset.a === "del") { await deleteProducts([id]); drawQueue(); }
+    }));
+    // drag to reorder (desktop); arrows cover touch screens
+    li.ondragstart = (e) => { li.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; };
+    li.ondragend = () => { li.classList.remove("dragging"); save(order(), "Queue order saved."); };
+    li.ondragover = (e) => {
+      e.preventDefault();
+      const dragging = $("#qlist .dragging");
+      if (!dragging || dragging === li) return;
+      const r = li.getBoundingClientRect();
+      li.parentNode.insertBefore(dragging, e.clientY < r.top + r.height / 2 ? li : li.nextSibling);
+    };
+  });
+  // keep the "later run" divider honest after a drag
+  const cut = $("#qlist .cut"); if (cut) cut.ondragover = (e) => e.preventDefault();
+  clearTimeout(drawQueue.t);
+  if (live) drawQueue.t = setTimeout(() => { if (!$("#qlist .dragging")) drawQueue(); }, 8000);
+}
+
 async function deleteProducts(ids, state, n) {
   const count = ids ? ids.length : n;
   const ok = await confirmBox({ title: `Delete ${plural(count, "product")}?`, danger: true, ok: "Delete",
@@ -564,11 +661,14 @@ async function renderTeam(view) {
           <div><b>${esc(a.title)}</b><div class="muted small">${esc(a.role)}</div></div>
           <span class="state ${esc(a.state)}">${esc(STATE_WORD[a.state] || a.state)}</span></div>
         <div class="small">${esc(a.state_reason)}${a.current_item ? `: <b>${esc(a.current_item)}</b>` : ""}</div>
+        ${a.running && ["researcher", "creator"].includes(a.name) ? (a.running.stop_requested ? `<div class="muted small">Stopping after the current item…</div>`
+          : `<div><button class="btn small" data-stop="${esc(a.name)}">Stop after this one</button></div>`) : ""}
         <div class="muted small">${last ? `Last run ${esc(ago(last.ended_at || last.started_at))}: ${plural(last.items, "item")}, ${money(last.cost_usd)}${last.errors.length ? `, <span style="color:var(--bad)">${plural(last.errors.length, "problem")}</span>` : ""}` : "Hasn't run yet"}${nx ? ` · next ${esc(until(nx.at))}` : ""}</div>
       </div>`; }).join("")}</div>
     <div class="section-title"><h2>Everything that happened</h2></div>
     <div class="panel pad"><ul class="feed">${activityHTML(o.activity, 60)}</ul></div>`;
   $$(".agent").forEach((el) => { el.onclick = () => openAgent(el.dataset.name); el.onkeydown = (e) => { if (e.key === "Enter") openAgent(el.dataset.name); }; });
+  wireStops(view, () => renderTeam(view));
 }
 async function openAgent(name) {
   const a = await api(`/api/village/agent/${name}`);
@@ -577,13 +677,16 @@ async function openAgent(name) {
     <div class="dhead"><div class="meta"><span class="state ${esc(a.state)}" style="margin:0">${esc(STATE_WORD[a.state] || a.state)}</span><span>${esc(a.schedule)}</span></div>
       <h1><span style="display:inline-grid;place-items:center;width:34px;height:34px;border-radius:10px;font-size:18px;vertical-align:middle;margin-right:8px;color:#0e1016;background:${AGENT_COLOR[name] || "#ccc"}">${esc(a.title[0])}</span>${esc(a.title)}</h1>
       <p class="muted" style="margin:0">${esc(a.role)}</p>
-      <div class="dactions"><button class="btn" id="run-now" ${a.run_now_available ? "" : "disabled"}>Run now</button></div>
+      <div class="dactions">${a.running && ["researcher", "creator"].includes(name)
+        ? (a.running.stop_requested ? `<span class="muted">Stopping after the current item…</span>` : `<button class="btn" data-stop="${esc(name)}">Stop after this one</button>`)
+        : `<button class="btn" id="run-now" ${a.run_now_available ? "" : "disabled"}>Run now</button>`}</div>
       ${a.run_now_available ? "" : `<p class="muted small" style="margin:0">“Run now” needs RAILWAY_API_TOKEN and RAILWAY_SERVICE_IDS on the web service.</p>`}</div>
     <div class="sec"><h2>Right now</h2><p>${esc(a.state_reason)}${a.current_item ? `: <b>${esc(a.current_item)}</b>` : ""}</p>
       <p class="muted small">Today: ${plural(a.runs_today, "run")}, ${plural(a.items_today, "item")}, ${money(a.cost_today)} · ${a.input_count} waiting for it</p></div>
     <div class="sec"><h2>Recent runs</h2><ul class="timeline">${a.runs.map((r) => `<li>${pill(r.status)} <time>${esc(when(r.started_at))}</time>${plural(r.items, "item")} · ${money(r.cost_usd)}
       ${r.errors.length ? `<pre class="spec">${esc(r.errors.join("\n"))}</pre>` : ""}</li>`).join("") || "<li class='muted'>No runs yet.</li>"}</ul></div>`;
-  $("#run-now").onclick = async (e) => {
+  wireStops($("#detail"), () => openAgent(name));
+  if ($("#run-now")) $("#run-now").onclick = async (e) => {
     e.target.disabled = true;
     try { const r = await fetch(`/api/village/run/${name}`, { method: "POST" }); toast(r.ok ? `${a.title} started.` : `Couldn't start it (${r.status}).`, !r.ok); }
     catch { toast("Couldn't start it.", true); }
@@ -592,4 +695,5 @@ async function openAgent(name) {
 }
 
 /* ---------------------------------------------------------------- boot */
+refreshOverview().catch(() => {});
 route();

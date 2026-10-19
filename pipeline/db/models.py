@@ -66,6 +66,9 @@ class Product(Base):
     printify_product_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
+    # build order for ideas waiting for the Creator: lower first; None = after all prioritised ones, oldest first
+    priority: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # perceptual hash of the primary image, for near-duplicate detection
     phash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
@@ -96,6 +99,7 @@ class RunStatus:
     SUCCESS = "success"
     FAILED = "failed"
     CAP_REACHED = "cap_reached"
+    STOPPED = "stopped"  # the owner pressed Stop; work finished before that is kept
 
 
 class Run(Base):
@@ -109,6 +113,8 @@ class Run(Base):
     items_processed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     errors_json: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    # set by the owner's Stop button; the agent finishes its current item and ends the run
+    stop_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # token / image usage so cost can be re-derived if pricing changes
     usage_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
 

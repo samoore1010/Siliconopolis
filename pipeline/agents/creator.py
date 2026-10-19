@@ -66,20 +66,30 @@ class CreatorAgent(Agent):
     name = "creator"
     prompt_file = "creator"
 
-    def __init__(self, *a, batch_size: int = 10, **kw):
+    DEFAULT_BATCH = 10  # ideas built per daily run
+
+    def __init__(self, *a, batch_size: int = DEFAULT_BATCH, **kw):
         super().__init__(*a, **kw)
         self.batch_size = batch_size
 
     def execute(self, session: Session) -> None:
+        """Build up to batch_size ideas, ONE claim at a time, so the owner can reorder the queue or
+        press Stop while the run is going: the next item is always the current top of the queue."""
         owner = f"creator:{self.run_id}"
-        products = claim_products(session, state=ProductState.BRIEF, owner=owner, limit=self.batch_size,
-                                  lock_timeout_minutes=self.settings.lock_timeout_minutes)
-        self.log.info("claimed briefs", count=len(products))
         storage = get_storage()
         blocklist = get_blocklist()
         images = get_image_provider()
-
-        for product in products:
+        tried: set[int] = set()  # a failed build is retried next run, not again in this one
+        for _ in range(self.batch_size):
+            if self.should_stop():
+                break
+            claimed = claim_products(session, state=ProductState.BRIEF, owner=owner, limit=1,
+                                     lock_timeout_minutes=self.settings.lock_timeout_minutes, exclude_ids=tried)
+            if not claimed:
+                break
+            product = claimed[0]
+            tried.add(product.id)
+            self.log.info("building", product_id=product.id)
             try:
                 self._create_one(session, product, storage, blocklist, images)
                 transition(session, product, ProductState.CREATED)
@@ -96,8 +106,10 @@ class CreatorAgent(Agent):
                     product.qa_result_json = {"pass": False, "reasons": [f"creation failed {attempts}x: {str(e)[:300]}"]}
                     transition(session, product, ProductState.REJECTED, message=f"creation failed {attempts}x")
                 else:
-                    release(session, product)  # stays in brief for the next run
+                    release(session, product)
+                    product.priority = None  # a failed build goes to the back of the queue for a retry
             session.commit()
+            self.report_progress()
 
     # ------------------------------------------------------------------ helpers
     @property

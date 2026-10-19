@@ -76,6 +76,8 @@ def derive_agent_state(
         return AgentState.WORKING, "run in progress"
     if last_run_status == RunStatus.FAILED:
         return AgentState.ERROR, "last run failed"
+    if last_run_status == RunStatus.STOPPED:
+        return AgentState.IDLE, "stopped by you; will run again on schedule"
     if last_run_status == RunStatus.CAP_REACHED:
         return AgentState.CAP_REACHED, "last run stopped at a cap"
     if stale_locks:
@@ -132,6 +134,9 @@ def collect_village_state(session: Session, settings: Settings) -> dict[str, Any
             "runs_today": len(today), "items_today": sum(r.items_processed for r in today),
             "cost_today": round(sum(r.cost_usd or 0.0 for r in today), 4),
             "last_run": asdict(RunInfo.from_row(last)) if last else None,
+            "running": ({"run_id": open_runs[0].id, "started_at": _aware(open_runs[0].started_at).isoformat(),
+                         "items": open_runs[0].items_processed, "stop_requested": bool(open_runs[0].stop_requested_at)}
+                        if open_runs else None),
             "run_now_available": settings.run_now_enabled,
         })
 
