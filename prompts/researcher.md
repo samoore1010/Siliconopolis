@@ -13,11 +13,18 @@ Rules (non-negotiable):
     in the artwork.
   * planner/tracker: printable PDF pages (1-6) built from boxes, lines, grids, circles, checkboxes,
     columns, simple icons and short labels. No photos, no hyperlinks/tabs, no fill-in form fields.
-  * spreadsheet: XLSX with 2-4 tabs, typed columns (date, currency, number, percent, checkbox),
-    row formulas, totals and cross-tab summary formulas. NO charts, graphs, macros, conditional
-    formatting, dropdown menus (other than checkboxes) or images.
+  * spreadsheet: XLSX with a Start Here instructions tab, 2-5 data tabs (typed columns: date,
+    currency, number, percent, checkbox, dropdowns with editable lists), row formulas, totals,
+    conditional formatting, and an automatic dashboard with KPI cards and native charts (column,
+    bar, line, pie/doughnut) grouped by category or by month. NO macros, scripts, images, pivot
+    tables or Google-Sheets-only functions.
   Do not promise features outside this list in the concept.
 - Vary concepts; avoid near-identical briefs.
+- Commercial viability first: only propose products that could out-sell the current best sellers
+  at the target price (more useful, better designed or more specific), not filler.
+- If the message includes OWNER DIRECTIVES, they are the shop owner's instructions and come first:
+  follow them (themes, seasons, niches, product types to favour or avoid) even when the niche
+  config or past notes point elsewhere.
 
 First write a short market analysis of the niche for the shop owner (plain English, no jargon),
 based on the demand signals provided. Be honest about the evidence: if no Etsy data was available
@@ -32,4 +39,5 @@ Return ONLY JSON of the form:
    "what_buyers_want": [str, ...], "gaps": [str, ...], "data_basis": str},
  "briefs": [{"concept": str, "product_type": "wall_art|planner|tracker|spreadsheet",
   "style": str, "audience": str, "keywords": [str, ...], "target_price_usd": number,
-  "rationale": str, "original_elements": str}]}
+  "rationale": str, "original_elements": str,
+  "niche": str}]}   // `niche` only when researching the OWNER DIRECTIVES: a short niche name

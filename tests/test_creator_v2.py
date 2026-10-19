@@ -67,8 +67,12 @@ def test_spreadsheet_preview_and_typed_columns(session):
     session.expire_all()
     p = session.get(Product, p.id)
     assert p.state == ProductState.CREATED and p.file_paths[0].endswith(".xlsx")
-    # primary (tabs 1-2), lifestyle, remaining tabs (mock spec has 3), what's-included card
-    assert len(p.image_paths) == 4 and any("more-tabs" in i for i in p.image_paths)
+    # dashboard hero, lifestyle, tabs 1-2, remaining tabs (mock spec has 3), instructions, what's-included
+    names = [i.rsplit("/", 1)[-1] for i in p.image_paths]
+    assert "listing-04-more-tabs.png" in names and names[-1] == "listing-06-included.png"
+    check = p.brief_json["creator_plan"]["file_check"]
+    assert check["ok"] and check["formulas"] > 0
+    assert check["sheets"][:2] == ["Start Here", "Dashboard"] and "Settings" in check["sheets"]
 
 
 def test_wall_art_refused_with_mock_images_off_local(session, monkeypatch):
@@ -165,4 +169,4 @@ def test_preview_formats_and_short_titles():
          "sample_rows": [[0.55, 1200]]}]}
     html = preview_html(spec, sheets=[2])
     assert "55%" in html and "$1,200.00" in html and "keyword stuffing" not in html
-    assert "Example data shown" in html
+    assert "Example entries included" in html

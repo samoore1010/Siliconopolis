@@ -12,6 +12,17 @@ async function api(path) {
   return r.json();
 }
 
+async function send(method, path, body) {
+  const r = await fetch(path, {
+    method, credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-Siliconopolis": "1" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : `${r.status}`);
+  return data;
+}
+
 function ago(iso) {
   if (!iso) return "";
   const d = new Date(iso), s = (Date.now() - d) / 1000;
@@ -83,6 +94,50 @@ async function loadOverview() {
   }).join("");
 }
 
+/* ---------------- owner directives ---------------- */
+async function loadDirectives() {
+  const d = await api("/api/dashboard/directives");
+  const list = d.directives;
+  $("#directives").innerHTML = list.length ? list.map((n) => `
+    <li class="${n.active ? "" : "paused"}">
+      <span class="txt">${esc(n.text)}</span>
+      <span class="hint small">${n.active ? (n.used_at ? `used by the Researcher ${esc(ago(n.used_at))}` : "used on the Researcher's next run") : "paused"}</span>
+      <span class="acts">
+        <button class="link" data-act="toggle" data-id="${n.id}" data-active="${n.active ? 1 : 0}">${n.active ? "Pause" : "Resume"}</button>
+        <button class="link danger" data-act="delete" data-id="${n.id}">Remove</button>
+      </span>
+    </li>`).join("") : `<li class="hint">No direction set. The Researcher follows the niches in niches.yaml.</li>`;
+  document.querySelectorAll("#directives button[data-act]").forEach((b) => b.addEventListener("click", async () => {
+    try {
+      if (b.dataset.act === "toggle") await send("PATCH", `/api/dashboard/directives/${b.dataset.id}`, { active: b.dataset.active !== "1" });
+      else if (confirmRemove(b)) await send("DELETE", `/api/dashboard/directives/${b.dataset.id}`);
+      else return;
+      loadDirectives();
+    } catch (e) { flash($("#directive-msg"), e.message, true); }
+  }));
+}
+function confirmRemove(b) {
+  if (b.dataset.armed) return true;
+  b.dataset.armed = "1"; b.textContent = "Click again to remove";
+  setTimeout(() => { delete b.dataset.armed; b.textContent = "Remove"; }, 3000);
+  return false;
+}
+function flash(el, text, bad = false) {
+  el.textContent = text; el.className = "msg " + (bad ? "status-bad" : "status-ok");
+  setTimeout(() => { el.textContent = ""; }, 5000);
+}
+$("#directive-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const box = $("#directive-text"), text = box.value.trim();
+  if (!text) return;
+  try {
+    await send("POST", "/api/dashboard/directives", { text });
+    box.value = "";
+    flash($("#directive-msg"), "Saved. The Researcher will follow this on its next run.");
+    loadDirectives();
+  } catch (err) { flash($("#directive-msg"), err.message, true); }
+});
+
 /* ---------------- products ---------------- */
 const state = { filter: null, q: "", products: [] };
 
@@ -110,6 +165,7 @@ function renderProducts() {
         <div class="meta"><span class="st ${esc(p.state)}">${esc(p.stage)}</span><span>${esc(p.type_label)}</span>${p.price ? `<span>· ${money(p.price)}</span>` : ""}</div>
         <div class="t">${esc(p.title)}</div>
         <div class="o">${esc(p.one_liner)}</div>
+        ${p.revision_pending ? `<div class="why-rev">Changes requested · rebuilding</div>` : ""}
         ${p.top_reason ? `<div class="why-bad">QA: ${esc(p.top_reason)}</div>` : ""}
         <div class="meta">${esc(p.niche || "")} · ${esc(ago(p.updated_at))}</div>
       </div>
@@ -120,7 +176,38 @@ $("#search").addEventListener("input", (e) => { state.q = e.target.value; render
 
 /* ---------------- product detail ---------------- */
 function scoreColor(v) { return v >= 8 ? "var(--good)" : v >= 6 ? "var(--warn)" : "var(--bad)"; }
-const SCORE_LABEL = { quality: "Visual quality", legibility: "Legibility", artifacts: "No glitches", matches_brief: "Matches the idea" };
+const SCORE_LABEL = { quality: "Visual quality", legibility: "Legibility", artifacts: "No glitches", matches_brief: "Matches the idea",
+  design_polish: "Design polish", commercial_viability: "Would it sell?" };
+const COMMERCIAL = ["design_polish", "commercial_viability"];
+
+function fileCheck(fc) {
+  if (!fc) return "";
+  if (fc.ok) return `<p class="status-ok small">✓ File check passed: opens cleanly${fc.recalculated ? `, ${fc.formulas} formulas recalculated with zero errors` : ""}.</p>`;
+  return `<p class="status-bad small">File check failed: ${esc((fc.errors || []).slice(0, 3).join("; "))}</p>`;
+}
+
+function feedbackBlock(p) {
+  const kindLabel = (c) => c.kind === "revision"
+    ? `<span class="pill rev">Change request · ${c.status === "addressed" ? "rebuilt" : "waiting for rebuild"}</span>`
+    : `<span class="pill">Note${c.status === "included" ? " · used" : ""}</span>`;
+  const why = p.revision_pending ? "Changes already requested; the Creator rebuilds it on its next run (daily, 7 AM)."
+    : !p.can_revise ? ({ brief: "Not built yet: notes you leave now are used when it's built.",
+        drafted: "Already an Etsy draft: edit it in Etsy.", published: "Live on Etsy: edit it in Etsy." }[p.state]
+        || "An agent is working on it right now.") : "";
+  return `<div class="sec feedback">
+    <h2>Your feedback</h2>
+    ${p.revision_pending ? `<div class="alert action"><b>Rebuilding</b><span>You asked for changes. The Creator rebuilds this on its next run, then QA checks your changes were made.</span></div>` : ""}
+    <ul class="comments">${(p.comments || []).map((c) => `<li>${kindLabel(c)}<time>${esc(when(c.created_at))}</time><p>${esc(c.text)}</p></li>`).join("")
+      || `<li class="hint">No notes yet. Tell the team what to change: colours, layout, tabs, wording, anything.</li>`}</ul>
+    <textarea id="comment-text" rows="3" maxlength="2000" placeholder="e.g. Make the dashboard the first tab, use a warmer palette, and add a tab for mileage."></textarea>
+    <div class="row">
+      <button class="btn" id="comment-save">Save note</button>
+      <button class="btn primary" id="comment-revise" ${p.can_revise && !p.revision_pending ? "" : "disabled"}>Request changes &amp; rebuild</button>
+      <span class="msg" id="comment-msg"></span>
+    </div>
+    ${why ? `<p class="hint small">${esc(why)}</p>` : `<p class="hint small">“Request changes” sends it back to the Creator with your notes; the old version stays visible until the new one is built.</p>`}
+  </div>`;
+}
 
 function marketBlock(m, ref) {
   if (!m && !ref) return `<p class="hint">No market analysis was saved for this product (it was researched before this feature existed).</p>`;
@@ -137,7 +224,7 @@ function marketBlock(m, ref) {
     <div class="lbl">Evidence</div><p class="hint">${esc(a.data_basis || "")} ${m.etsy_data ? `(${m.signals_count} Etsy listings sampled)` : "(no live Etsy data yet)"}</p>`;
 }
 
-async function openProduct(id) {
+async function openProduct(id, keepScroll = false) {
   const p = await api(`/api/dashboard/product/${id}`);
   const w = p.why || {};
   const imgs = p.images || [];
@@ -164,12 +251,17 @@ async function openProduct(id) {
         ${qa ? `<div class="sec">
           <h2>QA review</h2>
           <div class="verdict ${qa.passed ? "ok" : "no"}">${qa.passed ? "Passed: approved for Etsy" : "Rejected: not good enough to list"}</div>
-          ${Object.entries(qa.scores || {}).map(([k, v]) => `<div class="score"><span>${esc(SCORE_LABEL[k] || k)}</span><span class="track"><i style="width:${v * 10}%;background:${scoreColor(v)}"></i></span><b>${esc(v)}</b></div>`).join("")}
+          ${qa.verdict ? `<p class="qa-verdict">${esc(qa.verdict)}</p>` : ""}
+          ${Object.entries(qa.scores || {}).map(([k, v]) => `<div class="score ${COMMERCIAL.includes(k) ? "biz" : ""}"><span>${esc(SCORE_LABEL[k] || k)}</span><span class="track"><i style="width:${v * 10}%;background:${COMMERCIAL.includes(k) ? (v >= 8 ? "var(--good)" : "var(--bad)") : scoreColor(v)}"></i></span><b>${esc(v)}</b></div>`).join("")}
+          ${qa.reviewed ? `<p class="hint small">Reviewed ${qa.reviewed.listing_images} listing image(s) and ${qa.reviewed.file_images} view(s) of the actual file. "Design polish" and "Would it sell?" must both be 8+.</p>` : ""}
+          ${fileCheck(p.file_check)}
+          ${qa.improvements && qa.improvements.length ? `<div class="lbl">How to make it better</div><ul>${qa.improvements.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
           ${qa.reasons.length ? `<div class="lbl">QA's notes</div><ol class="reasons">${qa.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ol>` : ""}
           ${qa.ip_concerns.length ? `<div class="lbl">Copyright / trademark concerns</div><ul>${qa.ip_concerns.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
         </div>` : `<div class="sec"><h2>QA review</h2><p class="hint">Not reviewed yet.</p></div>`}
       </div>
     </div>
+    ${feedbackBlock(p)}
     <div class="sec"><h2>Market analysis for “${esc(p.niche || "")}”</h2>${marketBlock(p.market, p.market_summary)}</div>
     <div class="dgrid">
       <div class="sec">
@@ -198,10 +290,22 @@ async function openProduct(id) {
     main.dataset.full = b.dataset.full;
   }));
   if (main) main.addEventListener("click", () => { $("#lightbox img").src = main.dataset.full; $("#lightbox").hidden = false; });
+  const post = async (revise) => {
+    const text = $("#comment-text").value.trim();
+    if (!text) { flash($("#comment-msg"), "Write a note first.", true); return; }
+    try {
+      await send("POST", `/api/dashboard/product/${id}/comments`, { text, revise });
+      await openProduct(id, true);
+      flash($("#comment-msg"), revise ? "Sent back to the Creator." : "Saved.");
+      if ($("#tab-products").classList.contains("on")) loadProducts();
+    } catch (e) { flash($("#comment-msg"), e.message, true); }
+  };
+  $("#comment-save").addEventListener("click", () => post(false));
+  $("#comment-revise").addEventListener("click", () => post(true));
   $("#drawer").classList.add("open");
   $("#drawer").setAttribute("aria-hidden", "false");
   $("#scrim").hidden = false;
-  $("#drawer").scrollTop = 0;
+  if (!keepScroll) $("#drawer").scrollTop = 0;
   history.replaceState(null, "", `#product-${id}`);
 }
 function closeDrawer() {
@@ -250,6 +354,7 @@ async function loadResearch() {
 
 /* ---------------- boot ---------------- */
 async function boot() {
+  loadDirectives().catch(() => {});
   try { await loadOverview(); } catch (e) { $("#attention").innerHTML = `<div class="alert warn"><b>Error</b><span>${esc(e.message)}</span></div>`; }
   const h = location.hash.slice(1);
   if (h.startsWith("product-")) { showTab("products"); openProduct(h.slice(8)); }

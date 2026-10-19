@@ -1,6 +1,9 @@
 """Owner dashboard API: what the agents did, in plain English, and the products they made.
 
-Read-only. Everything shown comes from the database and storage the agents write to.
+Everything shown comes from the database and storage the agents write to. The only writes are the
+owner's own input: shop-wide directives for the Researcher and comments / revision requests on a
+product (which send it back to the Creator). Writes need the custom X-Siliconopolis header, which a
+cross-site form cannot send, so a logged-in browser cannot be tricked into posting them.
 """
 
 from __future__ import annotations
@@ -11,14 +14,25 @@ from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from pipeline.config import get_settings
 from pipeline.db import session_scope
-from pipeline.db.events import EventKind
-from pipeline.db.models import Event, Product, ProductState, ResearchNote, Run
+from pipeline.db.events import EventKind, record_event
+from pipeline.db.locking import transition
+from pipeline.db.models import (
+    Event,
+    OwnerNote,
+    OwnerNoteKind,
+    Product,
+    ProductState,
+    ResearchNote,
+    Run,
+    utcnow,
+)
 from pipeline.generators.mockups import short_title
 from pipeline.guardrails.caps import briefs_this_week, drafts_today, todays_spend
 from pipeline.storage import get_storage
@@ -26,6 +40,33 @@ from pipeline.web.auth import require_viewer
 from pipeline.web.village_state import _aware, product_summary
 
 router = APIRouter(prefix="/api/dashboard", dependencies=[Depends(require_viewer)])
+
+REVISABLE = (ProductState.CREATED, ProductState.APPROVED, ProductState.REJECTED)
+MAX_NOTE_CHARS = 2000
+
+
+def require_write(x_siliconopolis: str | None = Header(None)) -> None:
+    if x_siliconopolis != "1":
+        raise HTTPException(403, "missing X-Siliconopolis header")
+
+
+class NoteIn(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_NOTE_CHARS)
+
+
+class CommentIn(NoteIn):
+    revise: bool = False
+
+
+class DirectivePatch(BaseModel):
+    text: str | None = Field(None, min_length=1, max_length=MAX_NOTE_CHARS)
+    active: bool | None = None
+
+
+def _note(n: OwnerNote) -> dict[str, Any]:
+    return {"id": n.id, "kind": n.kind, "product_id": n.product_id, "text": n.text, "active": n.active,
+            "status": n.status, "created_at": _aware(n.created_at).isoformat() if n.created_at else None,
+            "used_at": _aware(n.used_at).isoformat() if n.used_at else None}
 
 STAGES = [
     {"state": ProductState.BRIEF, "label": "Ideas", "help": "Researched product ideas waiting to be built"},
@@ -61,6 +102,7 @@ def _card(p: Product) -> dict[str, Any]:
         "verdict": None if not qa else ("passed" if qa.get("pass") else "failed"),
         "top_reason": str(reasons[0])[:220] if reasons and not qa.get("pass") else None,
         "created_at": _aware(p.created_at).isoformat() if p.created_at else None,
+        "revision_pending": bool(brief.get("revision")),
     }
 
 
@@ -187,7 +229,10 @@ def product(product_id: int):
         if not p:
             raise HTTPException(404, "unknown product")
         brief = {k: v for k, v in (p.brief_json or {}).items()
-                 if k not in ("creator_plan", "market", "run_id", "create_attempts", "last_create_error", "niche")}
+                 if k not in ("creator_plan", "market", "run_id", "create_attempts", "last_create_error", "niche",
+                              "revision", "revisions_done")}
+        notes = s.execute(select(OwnerNote).where(OwnerNote.product_id == product_id)
+                          .order_by(OwnerNote.id.asc())).scalars().all()
         plan = (p.brief_json or {}).get("creator_plan") or {}
         market_ref = (p.brief_json or {}).get("market") or {}
         market = None
@@ -213,7 +258,13 @@ def product(product_id: int):
             "design": {"palette": plan.get("palette"), "planner_spec": plan.get("planner_spec"),
                        "spreadsheet_spec": plan.get("spreadsheet_spec"), "image_prompt": plan.get("image_prompt")},
             "qa": {"passed": qa.get("pass"), "scores": qa.get("scores") or {}, "reasons": qa.get("reasons") or [],
-                   "ip_concerns": qa.get("ip_concerns") or [], "checks": qa.get("checks") or {}} if qa else None,
+                   "ip_concerns": qa.get("ip_concerns") or [], "checks": qa.get("checks") or {},
+                   "verdict": qa.get("verdict"), "improvements": qa.get("improvements") or [],
+                   "reviewed": qa.get("reviewed")} if qa else None,
+            "file_check": plan.get("file_check"),
+            "comments": [_note(n) for n in notes],
+            "revision_pending": bool((p.brief_json or {}).get("revision")),
+            "can_revise": p.state in REVISABLE and not p.locked_by,
             "listing": {k: v for k, v in (p.listing_json or {}).items() if k in ("title", "description", "tags", "price", "etsy_url")},
             "images": [{"thumb": f"/api/village/image/{p.id}/{i}?w=600", "full": f"/api/village/image/{p.id}/{i}?w=1200"}
                        for i in range(len(p.image_paths or []))],
@@ -264,3 +315,92 @@ def research(limit: int = Query(30, ge=1, le=200)):
             else:
                 notes_out.append({"source": n.source, "created_at": _aware(n.created_at).isoformat(), "content": n.content})
     return {"market": market, "notes": notes_out}
+
+
+# ---------------------------------------------------------------------------------------------- owner input
+@router.post("/product/{product_id}/comments", dependencies=[Depends(require_write)])
+def add_comment(product_id: int, body: CommentIn):
+    """Leave a note on a product. With revise=true the product goes back to the Creator, which rebuilds
+    it with this feedback (and QA checks the feedback was applied)."""
+    text = body.text.strip()
+    with session_scope() as s:
+        p = s.get(Product, product_id)
+        if not p:
+            raise HTTPException(404, "unknown product")
+        if body.revise:
+            if p.state not in REVISABLE:
+                raise HTTPException(409, {
+                    ProductState.BRIEF: "This idea hasn't been built yet; your note will be used when it is.",
+                    ProductState.DRAFTED: "This product is already an Etsy draft; edit or delete it in Etsy.",
+                    ProductState.PUBLISHED: "This product is live on Etsy; edit it in Etsy.",
+                }.get(p.state, f"Products in '{p.state}' can't be revised."))
+            if p.locked_by:
+                raise HTTPException(409, "An agent is working on this product right now; try again in a few minutes.")
+        note = OwnerNote(kind=OwnerNoteKind.REVISION if body.revise else OwnerNoteKind.COMMENT, product_id=p.id,
+                         text=text, status="open" if body.revise else None)
+        s.add(note)
+        if body.revise:
+            brief = dict(p.brief_json or {})
+            done = brief.get("revisions_done") or []
+            open_notes = s.execute(select(OwnerNote).where(OwnerNote.product_id == p.id,
+                                                           OwnerNote.kind == OwnerNoteKind.COMMENT,
+                                                           OwnerNote.status.is_(None))).scalars().all()
+            # earlier plain comments on this version ride along with the revision request
+            feedback = "\n".join(f"- {n.text}" for n in open_notes) + ("\n" if open_notes else "") + f"- {text}"
+            for n in open_notes:
+                n.status = "included"
+            brief["revision"] = {"feedback": feedback, "round": len(done) + 1,
+                                 "requested_at": utcnow().isoformat(), "previous_plan": brief.get("creator_plan") or {},
+                                 "previous_qa": {k: (p.qa_result_json or {}).get(k) for k in ("pass", "scores", "reasons")}}
+            brief.pop("creator_plan", None)
+            brief.pop("create_attempts", None)
+            brief.pop("last_create_error", None)
+            p.brief_json = brief
+            p.qa_result_json = None
+            transition(s, p, ProductState.BRIEF, message=f"{short_title(_title(p))}: owner requested changes")
+        else:
+            record_event(s, kind=EventKind.INFO, agent="owner", product_id=p.id, message=f"Owner commented: {text[:160]}")
+        s.flush()
+        return {"comment": _note(note), "state": p.state}
+
+
+@router.get("/directives")
+def list_directives():
+    with session_scope() as s:
+        rows = s.execute(select(OwnerNote).where(OwnerNote.kind == OwnerNoteKind.DIRECTIVE)
+                         .order_by(OwnerNote.active.desc(), OwnerNote.id.desc())).scalars().all()
+        return {"directives": [_note(n) for n in rows]}
+
+
+@router.post("/directives", dependencies=[Depends(require_write)])
+def add_directive(body: NoteIn):
+    with session_scope() as s:
+        n = OwnerNote(kind=OwnerNoteKind.DIRECTIVE, text=body.text.strip(), active=True)
+        s.add(n)
+        record_event(s, kind=EventKind.INFO, agent="owner", message=f"New direction for the team: {n.text[:160]}")
+        s.flush()
+        return {"directive": _note(n)}
+
+
+@router.patch("/directives/{note_id}", dependencies=[Depends(require_write)])
+def update_directive(note_id: int, body: DirectivePatch):
+    with session_scope() as s:
+        n = s.get(OwnerNote, note_id)
+        if not n or n.kind != OwnerNoteKind.DIRECTIVE:
+            raise HTTPException(404, "unknown directive")
+        if body.text is not None:
+            n.text = body.text.strip()
+        if body.active is not None:
+            n.active = body.active
+        s.flush()
+        return {"directive": _note(n)}
+
+
+@router.delete("/directives/{note_id}", dependencies=[Depends(require_write)])
+def delete_directive(note_id: int):
+    with session_scope() as s:
+        n = s.get(OwnerNote, note_id)
+        if not n or n.kind != OwnerNoteKind.DIRECTIVE:
+            raise HTTPException(404, "unknown directive")
+        s.delete(n)
+        return {"deleted": note_id}

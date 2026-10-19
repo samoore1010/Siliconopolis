@@ -23,6 +23,16 @@
     <!-- OVERVIEW -->
     <section id="tab-overview" class="tab on">
       <div id="attention"></div>
+      <div class="panel direction">
+        <h2 class="h">Your direction for the team</h2>
+        <p class="hint">Tell the Researcher what to focus on, e.g. “Focus on Halloween decor” or “More spreadsheets for wedding planners, no wall art”. Half of each research run goes to your directions; it can open new niches for them.</p>
+        <form id="directive-form" class="row">
+          <input id="directive-text" maxlength="2000" placeholder="Focus on Halloween decor" aria-label="New direction">
+          <button class="btn primary" type="submit">Add</button>
+          <span class="msg" id="directive-msg"></span>
+        </form>
+        <ul class="directives" id="directives"></ul>
+      </div>
       <h2 class="h">Where every product is</h2>
       <p class="hint">Products move left to right. Click a stage to see the products in it.</p>
       <div class="stages" id="stages"></div>

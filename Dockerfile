@@ -9,9 +9,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Fonts used by Claude-designed planner pages and listing images (all open-licensed).
+# LibreOffice Calc (headless) recalculates every generated workbook so broken formulas never ship,
+# and renders the real file for QA and listing images. Carlito/Caladea are metric-compatible
+# stand-ins for Calibri/Cambria so the render matches what buyers see in Excel.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates fontconfig libjpeg62-turbo zlib1g \
       fonts-dejavu-core fonts-liberation2 fonts-inter fonts-lato fonts-open-sans \
+      fonts-crosextra-carlito fonts-crosextra-caladea libreoffice-calc-nogui \
  && rm -rf /var/lib/apt/lists/*
 # Google Fonts (OFL) not packaged in Debian; a failed download only means a font fallback.
 RUN mkdir -p /usr/share/fonts/truetype/google && cd /usr/share/fonts/truetype/google \

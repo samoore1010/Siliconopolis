@@ -14,14 +14,23 @@ import json
 import re
 
 from PIL import Image
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pipeline.adapters.images import get_image_provider
 from pipeline.db.locking import claim_products, release, transition
-from pipeline.db.models import Product, ProductState, ProductType
-from pipeline.generators import mockups, render
+from pipeline.db.models import OwnerNote, OwnerNoteKind, Product, ProductState, ProductType
+from pipeline.generators import mockups, office, render
 from pipeline.generators.pdf import image_to_pdf
-from pipeline.generators.xlsx import preview_html, render_spreadsheet
+from pipeline.generators.xlsx import (
+    SpreadsheetError,
+    preview_html,
+    render_spreadsheet,
+    sheet_snapshots,
+    spec_problems,
+    validate_xlsx,
+    window_html,
+)
 from pipeline.guardrails import CapReached, get_blocklist
 from pipeline.llm import LLMError
 from pipeline.storage import get_storage
@@ -32,6 +41,24 @@ PRINT_RATIOS = {"4x5 (8x10, 16x20)": (4, 5), "3x4 (9x12, 18x24)": (3, 4), "2x3 (
                 "ISO A (A4, A3, A2)": (210, 297), "11x14": (11, 14)}
 MAX_LAYOUT_FIXES = 2
 MAX_CREATE_ATTEMPTS = 2  # after this many failed creations a brief is rejected instead of retried forever
+MAX_SHEET_FIXES = 2
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+# brief keys that are bookkeeping, not part of the product idea
+INTERNAL_KEYS = ("create_attempts", "last_create_error", "creator_plan", "revision", "revisions_done")
+
+
+def revision_note(brief: dict) -> str:
+    """Owner feedback for a rebuild, phrased for the Creator (and QA)."""
+    rev = brief.get("revision") or {}
+    if not rev.get("feedback"):
+        return ""
+    prev = rev.get("previous_plan") or {}
+    prev_summary = {k: prev.get(k) for k in ("title_hint", "palette", "planner_spec", "spreadsheet_spec", "image_prompt")
+                    if prev.get(k)}
+    return ("\n\nOWNER REVISION REQUEST (round {round}) - this is the shop owner's direct feedback on the previous "
+            "version. Address every point; it overrides the brief where they conflict:\n{fb}\n\n"
+            "Previous version (change what the owner asked for, keep what they did not mention):\n{prev}").format(
+        round=rev.get("round", 1), fb=rev["feedback"], prev=json.dumps(prev_summary)[:12000])
 
 
 class CreatorAgent(Agent):
@@ -98,11 +125,11 @@ class CreatorAgent(Agent):
         return gen.data
 
     def _design_pages(self, session, product: Product, brief: dict, plan: dict, palette: list[str],
-                      landscape: bool) -> str:
+                      landscape: bool, note: str = "") -> str:
         spec = plan.get("planner_spec") or {}
         user = (f"Design brief:\n{json.dumps(spec, indent=2)}\n\nPalette (background, ink, accent): {palette}\n"
                 f"Audience: {brief.get('audience')}\nStyle: {brief.get('style')}\n"
-                f"Orientation: {'landscape' if landscape else 'portrait'}\nProduct title: {plan.get('title_hint')}")
+                f"Orientation: {'landscape' if landscape else 'portrait'}\nProduct title: {plan.get('title_hint')}{note}")
         result = self.ask(session, task="creator_page_html", model=self.settings.model_worker, user=user,
                           max_tokens=16000, prompt="creator_page")
         product.add_cost(result.cost_usd)
@@ -135,11 +162,59 @@ class CreatorAgent(Agent):
                                  full_page=True)
         return mockups.primary_image(mockups.load(png), bg=palette[0])
 
+    def _snapshots(self, spec: dict, palette: list[str]) -> dict[str, bytes]:
+        try:
+            return sheet_snapshots(spec, palette=palette)
+        except Exception as e:  # noqa: BLE001 - previews fall back to the HTML renderer
+            self.log.warning("real-file snapshots failed; using HTML previews", error=str(e)[:200])
+            return {}
+
+    def _build_workbook(self, session, product: Product, spec: dict, palette: list[str],
+                        context: str) -> tuple[dict, bytes, dict]:
+        """Build, then prove the workbook is clean (every formula valid, zero errors after a real
+        recalculation). Problems go back to Claude to fix; a file that never passes is not shipped."""
+        if not office.available() and self.settings.app_env != "local":
+            raise RuntimeError("LibreOffice is not installed, so the spreadsheet cannot be verified; refusing to ship it")
+        problems: list[str] = []
+        for attempt in range(MAX_SHEET_FIXES + 1):
+            problems = spec_problems(spec, palette)
+            check: dict = {}
+            if not problems:
+                xlsx = render_spreadsheet(spec, palette=palette, strict=True)
+                check = validate_xlsx(xlsx)
+                if check["ok"]:
+                    return spec, xlsx, check
+                problems = check["errors"]
+            self.log.info("spreadsheet problems found; asking for a fix", product_id=product.id, attempt=attempt + 1,
+                          problems=problems[:5])
+            if attempt == MAX_SHEET_FIXES:
+                break
+            fix = self.ask(session, task="creator_sheet_fix", model=self.settings.model_worker, max_tokens=16000,
+                           user=(f"{context}\n\nYour spreadsheet_spec failed validation (cells are reported after a "
+                                 "full recalculation, data rows start at row 4):\n- " + "\n- ".join(problems[:20]) +
+                                 "\n\nReturn ONLY the corrected spreadsheet_spec JSON object (same schema). "
+                                 f"Keep everything that works.\n\n{json.dumps(spec)}"))
+            product.add_cost(fix.cost_usd)
+            try:
+                fixed = fix.json()
+            except LLMError:
+                continue
+            if isinstance(fixed, dict):
+                spec = fixed.get("spreadsheet_spec") if isinstance(fixed.get("spreadsheet_spec"), dict) else fixed
+        raise SpreadsheetError([f"spreadsheet failed validation after {MAX_SHEET_FIXES} fixes"] + problems[:5])
+
     # ------------------------------------------------------------------ main
     def _create_one(self, session, product: Product, storage, blocklist, images) -> None:
-        brief = {k: v for k, v in (product.brief_json or {}).items() if k not in ("create_attempts", "last_create_error")}
+        full = dict(product.brief_json or {})
+        brief = {k: v for k, v in full.items() if k not in INTERNAL_KEYS}
         mock_hint = " (This is a MOCK run; placeholder art is expected.)" if self._is_mock_run else ""
-        user = f"Brief:\n{json.dumps({**brief, 'product_type': product.product_type}, indent=2)}{mock_hint}"
+        comments = session.execute(select(OwnerNote).where(
+            OwnerNote.product_id == product.id, OwnerNote.kind == OwnerNoteKind.COMMENT,
+            OwnerNote.status.is_(None))).scalars().all()
+        owner_notes = ("\n\nOWNER NOTES on this product (apply them):\n" + "\n".join(f"- {c.text}" for c in comments)) \
+            if comments and not full.get("revision") else ""
+        user = (f"Brief:\n{json.dumps({**brief, 'product_type': product.product_type}, indent=2)}{mock_hint}"
+                f"{revision_note(full)}{owner_notes}")
         result = self.ask(session, task="creator_plan", model=self.settings.model_worker, user=user,
                           max_tokens=16000)
         try:
@@ -192,7 +267,7 @@ class CreatorAgent(Agent):
         elif product.product_type in (ProductType.PLANNER, ProductType.TRACKER):
             spec = plan.get("planner_spec") or {}
             landscape = str(spec.get("orientation", "portrait")).lower() == "landscape"
-            html = self._design_pages(session, product, brief, plan, palette, landscape)
+            html = self._design_pages(session, product, brief, plan, palette, landscape, revision_note(full) + owner_notes)
             hits = blocklist.check_many(re.sub(r"<[^>]+>", " ", html))
             if hits:
                 raise RuntimeError(f"blocklist hit in page text: {hits}")
@@ -219,32 +294,68 @@ class CreatorAgent(Agent):
 
         elif product.product_type == ProductType.SPREADSHEET:
             spec = plan.get("spreadsheet_spec") or {"title": title, "sheets": [{"name": "Sheet1", "columns": ["Date", "Item", "Amount"]}]}
-            xlsx = render_spreadsheet(spec, palette=palette)
-            files.append(storage.put(f"{base}/{slug}.xlsx", xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+            spec, xlsx, check = self._build_workbook(session, product, spec, palette, user)
+            plan = {**plan, "spreadsheet_spec": spec, "file_check": check}
+            files.append(storage.put(f"{base}/{slug}.xlsx", xlsx, XLSX_MIME))
             sheets = spec.get("sheets") or []
+            tabs = check.get("sheets") or [str(s.get("name")) for s in sheets]
+            dash_name = (spec.get("dashboard") or {}).get("name") or "Dashboard"
+            snaps = self._snapshots(spec, palette)
+            hero_tab = next((t for t in tabs if t in snaps and t.lower() == str(dash_name).lower()), None) or \
+                next((t for t in tabs[1:] if t in snaps), None)
+
+            def framed(tab: str, subtitle: str) -> Image.Image:
+                return mockups.load(render.html_to_png(window_html(
+                    snaps[tab], title=title, subtitle=subtitle, tabs=tabs, active=tab, palette=palette),
+                    width=1100, height=700, full_page=True))
 
             def shot(idx: list[int]) -> Image.Image:
                 return mockups.load(render.html_to_png(preview_html(spec, palette=palette, sheets=idx),
                                                        width=1100, height=700, full_page=True))
 
-            preview = shot([0, 1])
+            hero = framed(hero_tab, "Dashboard updates automatically · Excel & Google Sheets") if hero_tab else shot([0, 1])
             scene = self._scene(session, storage, images, "desk", scene_key, product)
-            imgs.append(storage.put(f"{base}/listing-01-primary.png", mockups.primary_image(preview, bg=palette[0]), "image/png"))
+            imgs.append(storage.put(f"{base}/listing-01-primary.png", mockups.primary_image(hero, bg=palette[0]), "image/png"))
             imgs.append(storage.put(f"{base}/listing-02-lifestyle.png",
-                                    mockups.scene_composite(preview, scene, framed=True, rotate=0) if scene
-                                    else mockups.styled_flat_lay(preview, accent=palette[2]), "image/png"))
-            if len(sheets) > 2:  # show every remaining tab so buyers (and QA) see all features
-                imgs.append(storage.put(f"{base}/listing-03-more-tabs.png",
-                                        mockups.primary_image(shot(list(range(2, min(len(sheets), 4)))), bg=palette[0]),
-                                        "image/png"))
-            sheet_names = [str(s.get("name")) for s in sheets][:5]
-            imgs.append(storage.put(f"{base}/listing-04-included.png", self._card(title, [
-                f"{len(sheet_names)} tabs: " + ", ".join(sheet_names), "Formulas and totals built in",
-                "Opens in Excel and Google Sheets", "Delivered blank (example data shown in photos)"], palette), "image/png"))
+                                    mockups.scene_composite(hero, scene, framed=True, rotate=0) if scene
+                                    else mockups.styled_flat_lay(hero, accent=palette[2]), "image/png"))
+            data_tabs = [t for t in tabs if t in snaps and t not in ("Start Here", "Settings", hero_tab)]
+            if data_tabs:  # real renders of the data tabs (true formula results, real styling)
+                for n, tab in enumerate(data_tabs[:2]):
+                    name = "listing-03-tabs.png" if n == 0 else "listing-04-more-tabs.png"
+                    imgs.append(storage.put(f"{base}/{name}", mockups.primary_image(
+                        framed(tab, "Example entries included · type over them with your own"), bg=palette[0]), "image/png"))
+            else:
+                imgs.append(storage.put(f"{base}/listing-03-tabs.png",
+                                        mockups.primary_image(shot([0, 1]), bg=palette[0]), "image/png"))
+                if len(sheets) > 2:  # show every remaining tab so buyers (and QA) see all features
+                    imgs.append(storage.put(f"{base}/listing-04-more-tabs.png",
+                                            mockups.primary_image(shot(list(range(2, min(len(sheets), 4)))), bg=palette[0]),
+                                            "image/png"))
+            if "Start Here" in snaps:
+                imgs.append(storage.put(f"{base}/listing-05-instructions.png", mockups.primary_image(
+                    framed("Start Here", "Step-by-step instructions built in"), bg=palette[0]), "image/png"))
+            sheet_names = [t for t in tabs if t != "Settings"][:6]
+            included = [f"{len(tabs)} tabs: " + ", ".join(sheet_names)]
+            if spec.get("dashboard"):
+                included.append("Automatic dashboard with charts")
+            included += ["Dropdowns you can customise", "Formulas and totals built in",
+                         "Opens in Excel and Google Sheets", "Example entries to show how it works"]
+            imgs.append(storage.put(f"{base}/listing-06-included.png", self._card(title, included, palette), "image/png"))
         else:
             raise RuntimeError(f"product_type {product.product_type} is Phase 2 (POD) and not implemented in v1")
 
         product.file_paths = files
         product.image_paths = imgs
-        product.brief_json = {**brief, "creator_plan": plan}
+        done = list(full.get("revisions_done") or [])
+        if full.get("revision"):
+            rev = {k: v for k, v in full["revision"].items() if k != "previous_plan"}
+            done.append({**rev, "completed_run": self.run_id})
+        product.brief_json = {**brief, "creator_plan": plan, **({"revisions_done": done} if done else {})}
+        for c in comments:
+            c.status = "included"
+        for n in session.execute(select(OwnerNote).where(OwnerNote.product_id == product.id,
+                                                         OwnerNote.kind == OwnerNoteKind.REVISION,
+                                                         OwnerNote.status == "open")).scalars():
+            n.status = "addressed"
         self.log.info("product created", product_id=product.id, files=len(files), images=len(imgs))
