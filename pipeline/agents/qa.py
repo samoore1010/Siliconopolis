@@ -88,7 +88,8 @@ class QAAgent(Agent):
 
         # 3. vision review with Claude
         images = [ImageInput(data=storage.get(p)) for p in product.image_paths[:3]]
-        mock_hint = "MOCK RUN: placeholder images are expected and acceptable." if self.settings.mode == "mock" else "LIVE RUN."
+        is_mock = self.settings.mode == "mock" and self.settings.app_env == "local"
+        mock_hint = "MOCK RUN: placeholder images are expected and acceptable." if is_mock else "LIVE RUN: these are the real product images that will be listed."
         user = (f"{mock_hint}\n\nBrief:\n{json.dumps({k: v for k, v in brief.items() if k != 'creator_plan'}, indent=2)}\n\n"
                 f"Product type: {product.product_type}\nReview the attached listing images.")
         result = self.ask(session, task="qa_vision", model=self.settings.model_worker, user=user, images=images, temperature=0.0)

@@ -114,10 +114,10 @@ class Agent:
         check_spend_cap(session, self.settings.max_daily_spend_usd, 0.0, None)
 
     def ask(self, session: Session, *, task: str, model: str, user: str, images: list[ImageInput] | None = None,
-            max_tokens: int = 8192, temperature: float = 0.7) -> LLMResult:
+            max_tokens: int = 8192, temperature: float = 0.7, prompt: str | None = None) -> LLMResult:
         # check cap before spending
         check_spend_cap(session, self.settings.max_daily_spend_usd, 0.0, None)
-        result = self.llm.complete(model=model, system=load_prompt(self.prompt_file), user=user, task=task,
+        result = self.llm.complete(model=model, system=load_prompt(prompt or self.prompt_file), user=user, task=task,
                                    images=images, max_tokens=max_tokens, temperature=temperature)
         self._usage["llm_calls"] += 1
         self._usage["input_tokens"] += result.input_tokens

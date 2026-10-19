@@ -1,20 +1,33 @@
 # Single image used by every Railway service; services differ only by start command.
-FROM python:3.12-slim AS base
+# bookworm: Playwright's Chromium system dependencies are supported on Debian 12.
+FROM python:3.12-slim-bookworm AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# fonts for Pillow/reportlab placeholder + mockup text rendering
+# Fonts used by Claude-designed planner pages and listing images (all open-licensed).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends fonts-dejavu-core libjpeg62-turbo zlib1g \
+ && apt-get install -y --no-install-recommends curl ca-certificates fontconfig libjpeg62-turbo zlib1g \
+      fonts-dejavu-core fonts-liberation2 fonts-inter fonts-lato fonts-open-sans \
  && rm -rf /var/lib/apt/lists/*
+# Google Fonts (OFL) not packaged in Debian; a failed download only means a font fallback.
+RUN mkdir -p /usr/share/fonts/truetype/google && cd /usr/share/fonts/truetype/google \
+ && for f in "nunito/Nunito%5Bwght%5D.ttf" "poppins/Poppins-Regular.ttf" "poppins/Poppins-SemiBold.ttf" \
+             "poppins/Poppins-Bold.ttf" "lora/Lora%5Bwght%5D.ttf" "playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf" \
+             "dmserifdisplay/DMSerifDisplay-Regular.ttf" "dmsans/DMSans%5Bopsz,wght%5D.ttf" "caveat/Caveat%5Bwght%5D.ttf"; do \
+      curl -fsSL -o "$(basename "$f" | sed 's/%5B/[/;s/%5D/]/')" "https://github.com/google/fonts/raw/main/ofl/$f" || echo "font $f skipped"; \
+    done \
+ && fc-cache -f
 
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+RUN pip install -r requirements.txt \
+ && python -m playwright install --with-deps chromium \
+ && chmod -R a+rx /ms-playwright
 
 COPY . .
 

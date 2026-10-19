@@ -115,7 +115,9 @@ production.
 | `STORAGE_BACKEND` | `s3` | `s3` | |
 | `S3_*` | bucket references | same | see Section B.6 |
 | `MODEL_RESEARCH` / `MODEL_WORKER` / `MODEL_CHEAP` | `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-haiku-5-5` | same | |
-| `IMAGE_PROVIDER` | `mock` | provider name | only `mock` implemented today |
+| `IMAGE_PROVIDER` | `mock` or `openai` | `openai` | `openai` enables wall art + AI lifestyle mockups |
+| `IMAGE_MODEL` / `IMAGE_QUALITY` | `gpt-image-1.5` / `high` | same | wall art quality (~$0.20/image at high) |
+| `MOCKUP_SCENES` / `MOCKUP_QUALITY` | `true` / `medium` | same | backgrounds generated once per scene, then reused |
 | `VILLAGE_USER`, `VILLAGE_PASSWORD` | ✔ | ✔ | basic auth for the dashboard; without them the village returns 503 off-local |
 | `RAILWAY_API_TOKEN`, `RAILWAY_SERVICE_IDS` | optional | optional | enables "Run now" buttons (Section H) |
 | `LOG_FORMAT` | `json` | `json` | Railway log explorer parses JSON lines |
@@ -123,7 +125,7 @@ production.
 | `ANTHROPIC_API_KEY` | ✔ | ✔ | |
 | `ETSY_API_KEY`, `ETSY_SHARED_SECRET`, `ETSY_SHOP_ID`, `ETSY_REDIRECT_URI` | when live | ✔ | redirect = `https://<web-domain>/oauth/etsy/callback` |
 | `ETSY_OAUTH_ACCESS_TOKEN`, `ETSY_OAUTH_REFRESH_TOKEN` | optional seed | optional seed | only seed the `oauth_tokens` table on first run |
-| `IMAGE_API_KEY` | when live | ✔ | |
+| `IMAGE_API_KEY` | when `openai` | ✔ | OpenAI API key |
 | `PRINTIFY_API_TOKEN`, `PRINTIFY_SHOP_ID` | Phase 2 | Phase 2 | |
 
 ## E. Etsy OAuth (once per environment, when going live)

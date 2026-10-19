@@ -209,19 +209,45 @@ class MockLLM(LLMClient):
                 "planner_spec": {
                     "title": short.title(),
                     "subtitle": "One page, one day, zero overwhelm",
-                    "sections": ["Top 3 priorities", "Time blocks", "Brain dump", "Water + movement", "Wins today"],
-                    "pages": 3,
+                    "orientation": "portrait",
+                    "fonts": {"heading": "Poppins", "body": "Inter"},
+                    "style": "calm, airy, rounded boxes",
+                    "pages": [
+                        {"name": "Daily focus", "purpose": "plan one day",
+                         "elements": ["large outlined focus box labelled 'Today's One Thing'",
+                                      "3 checkbox lines labelled 'If there's time'", "ruled notes area"]},
+                        {"name": "Weekly habits", "purpose": "track habits",
+                         "elements": ["6 habit rows each with 7 circles labelled M T W T F S S"]},
+                    ],
                 },
                 "spreadsheet_spec": {
                     "title": short.title(),
                     "sheets": [
-                        {"name": "Income", "columns": ["Date", "Client", "Description", "Amount", "Paid?"]},
-                        {"name": "Expenses", "columns": ["Date", "Vendor", "Category", "Amount", "Receipt?"]},
-                        {"name": "Summary", "columns": ["Month", "Income", "Expenses", "Profit"]},
+                        {"name": "Income", "rows": 100, "totals": True,
+                         "columns": [{"name": "Date", "type": "date"}, {"name": "Client", "type": "text"},
+                                     {"name": "Description", "type": "text"}, {"name": "Amount", "type": "currency"},
+                                     {"name": "Paid?", "type": "checkbox"}],
+                         "sample_rows": [["2026-01-05", "Maple Studio", "Logo refresh", 450, True],
+                                         ["2026-01-12", "Birch & Co", "Monthly retainer", 1200, False]]},
+                        {"name": "Expenses", "columns": ["Date", "Vendor", "Category", "Amount", "Receipt?"],
+                         "sample_rows": [["2026-01-03", "Paper Supply", "Materials", 38.5, True]]},
+                        {"name": "Summary", "totals": False,
+                         "columns": [{"name": "Month", "type": "text"}, {"name": "Income", "type": "currency"},
+                                     {"name": "Expenses", "type": "currency"},
+                                     {"name": "Profit", "type": "formula", "formula": "=B{r}-C{r}"}],
+                         "sample_rows": [["January", 1650, 38.5, 1611.5]]},
                     ],
                 },
                 "product_type": product_type,
             }
+        if task in ("creator_page_html", "creator_page_fix"):
+            return ("```html\n<html><head><style>.page{padding:.6in;background:#F7F3EC;display:flex;flex-direction:column;gap:.3in}"
+                    "h1{font-family:Poppins,sans-serif;margin:0}.box{flex:1;border:3px solid #A3B18A;border-radius:18px}"
+                    ".row{display:flex;gap:.12in}.c{width:.32in;height:.32in;border:2px solid #2B2B2B;border-radius:50%}"
+                    "footer{font-size:9pt;opacity:.6}</style></head><body>"
+                    "<div class='page'><h1>Today's One Thing</h1><div class='box'></div><footer>Mock planner</footer></div>"
+                    "<div class='page'><h1>Weekly Habits</h1><div class='row'>" + "<span class='c'></span>" * 7 +
+                    "</div><footer>Mock planner</footer></div></body></html>\n```")
         if task == "qa_vision":
             return {
                 "pass": True,

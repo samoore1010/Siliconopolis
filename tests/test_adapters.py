@@ -76,4 +76,10 @@ def test_generators_produce_valid_files():
     assert pdf.startswith(b"%PDF")
     xlsx = render_spreadsheet({"title": "Book", "sheets": [{"name": "Income", "columns": ["Date", "Amount"]}]})
     wb = load_workbook(io.BytesIO(xlsx))
-    assert wb.sheetnames == ["Income"] and wb["Income"]["B45"].value == "=SUM(B4:B43)"
+    # default 50 data rows (4-53), totals row 54; "Amount" inferred as currency
+    assert wb.sheetnames == ["Income"] and wb["Income"]["B54"].value == "=SUM(B4:B53)"
+    typed = render_spreadsheet({"title": "Book", "sheets": [{"name": "Summary", "rows": 5, "totals": False, "columns": [
+        {"name": "Income", "type": "currency"}, {"name": "Costs", "type": "currency"},
+        {"name": "Profit", "type": "formula", "formula": "=A{r}-B{r}"}]}]})
+    ws = load_workbook(io.BytesIO(typed))["Summary"]
+    assert ws["C4"].value == "=A4-B4" and ws["C8"].value == "=A8-B8" and ws["A9"].value is None

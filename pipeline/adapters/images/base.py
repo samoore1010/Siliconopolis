@@ -26,7 +26,11 @@ class ImageProvider(ABC):
 
     @abstractmethod
     def generate(self, prompt: str, *, size: tuple[int, int] = (1024, 1024), style: str | None = None,
-                 negative_prompt: str | None = None) -> GeneratedImage: ...
+                 negative_prompt: str | None = None, quality: str | None = None) -> GeneratedImage: ...
+
+    @property
+    def is_real(self) -> bool:
+        return self.name != "mock"
 
     @abstractmethod
     def ping(self) -> None: ...
@@ -40,9 +44,13 @@ def get_image_provider() -> ImageProvider:
         from .mock import MockImageProvider
 
         return MockImageProvider()
-    # TODO(Milestone 3): add OpenAI / Google / Ideogram implementations behind this interface.
+    if provider == "openai":
+        from .openai import OpenAIImageProvider
+
+        return OpenAIImageProvider(api_key=settings.image_api_key, model=settings.image_model,
+                                   quality=settings.image_quality)
     raise NotImplementedError(
-        f"IMAGE_PROVIDER={provider!r} is not implemented yet. Supported: mock. "
+        f"IMAGE_PROVIDER={provider!r} is not implemented yet. Supported: mock, openai. "
         "Add a class in pipeline/adapters/images/ and register it here."
     )
 

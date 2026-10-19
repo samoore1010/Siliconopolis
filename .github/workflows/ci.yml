@@ -23,6 +23,7 @@ jobs:
           cache: pip
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-dejavu-core
       - run: pip install -r requirements-dev.txt
+      - run: python -m playwright install --with-deps chromium
       - run: ruff check pipeline tests scripts
       - run: alembic upgrade head
       - run: python -m pipeline smoke
