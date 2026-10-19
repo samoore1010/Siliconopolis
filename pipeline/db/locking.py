@@ -8,10 +8,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from pipeline.db.models import Product, utcnow
+
+# Build/review order: owner-set priority first (lower = sooner), then oldest first.
+QUEUE_ORDER = (func.coalesce(Product.priority, 2_000_000_000).asc(), Product.created_at.asc(), Product.id.asc())
 
 
 def claim_products(
@@ -22,6 +25,7 @@ def claim_products(
     limit: int,
     lock_timeout_minutes: int = 120,
     product_types: tuple[str, ...] | None = None,
+    exclude_ids: set[int] | None = None,
 ) -> list[Product]:
     """Atomically claim up to `limit` products in `state` for `owner`. Returns the claimed rows."""
     if limit <= 0:
@@ -31,11 +35,13 @@ def claim_products(
         select(Product.id)
         .where(Product.state == state)
         .where(or_(Product.locked_by.is_(None), Product.locked_at < stale_before))
-        .order_by(Product.created_at.asc(), Product.id.asc())
+        .order_by(*QUEUE_ORDER)
         .limit(limit * 2)
     )
     if product_types:
         q = q.where(Product.product_type.in_(product_types))
+    if exclude_ids:
+        q = q.where(Product.id.not_in(exclude_ids))
     candidate_ids = [row[0] for row in session.execute(q)]
 
     claimed: list[int] = []
@@ -55,7 +61,7 @@ def claim_products(
     if not claimed:
         return []
     rows = session.execute(select(Product).where(Product.id.in_(claimed))).scalars().all()
-    rows.sort(key=lambda p: claimed.index(p.id))
+    rows.sort(key=lambda p: claimed.index(p.id))  # keep queue order
     return list(rows)
 
 

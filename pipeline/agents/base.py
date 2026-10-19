@@ -46,6 +46,7 @@ class Agent:
         self.llm = llm or get_llm()
         self.log = get_logger(f"pipeline.agents.{self.name}")
         self.run_id: int | None = None
+        self.stopped = False  # set when the owner presses Stop; the run ends after the current item
         self._run_cost = 0.0
         self._usage: dict[str, Any] = {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0, "images": 0}
         self.errors: list[str] = []
@@ -69,6 +70,8 @@ class Agent:
         try:
             with session_scope() as s:
                 self.execute(s)
+            if self.stopped:
+                status = RunStatus.STOPPED
         except CapReached as e:
             status = RunStatus.CAP_REACHED
             self.errors.append(str(e))
@@ -124,6 +127,32 @@ class Agent:
         self._usage["output_tokens"] += result.output_tokens
         self.record_cost(session, result.cost_usd)
         return result
+
+    def should_stop(self) -> bool:
+        """True once the owner pressed Stop for this run (checked between items, never mid-item)."""
+        if self.stopped or self.run_id is None:
+            return self.stopped
+        try:
+            with session_scope() as s:
+                run = s.get(Run, self.run_id)
+                self.stopped = bool(run and run.stop_requested_at)
+        except Exception:  # noqa: BLE001 - a DB hiccup must not end a run
+            return False
+        if self.stopped:
+            self.log.info("stop requested by the owner; ending the run after the current item")
+            self._event(EventKind.INFO, f"{self.name} stopped by you after {self.items_processed} item(s)")
+        return self.stopped
+
+    def report_progress(self) -> None:
+        """Publish items done so far, so the dashboard can show progress during the run."""
+        try:
+            with session_scope() as s:
+                run = s.get(Run, self.run_id)
+                if run:
+                    run.items_processed = self.items_processed
+                    run.cost_usd = round(self._run_cost, 6)
+        except Exception:  # noqa: BLE001
+            pass
 
     def note_error(self, msg: str, **fields: Any) -> None:
         self.errors.append(msg)

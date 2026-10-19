@@ -232,3 +232,77 @@ def test_qa_reviews_real_file_and_enforces_commercial_bar(session, monkeypatch):
     qa = p.qa_result_json
     assert p.state == ProductState.REJECTED and qa["reviewed"]["file_images"] >= 1
     assert any("commercial_viability 6" in r for r in qa["reasons"])
+
+
+def test_build_queue_order_is_respected_and_can_change(session):
+    from pipeline.agents.creator import CreatorAgent
+    from pipeline.db.models import Product, ProductState
+
+    for i in range(4):
+        session.add(Product(state="brief", niche="n", product_type="spreadsheet", brief_json={"concept": f"Idea {i}"}))
+    session.commit()
+    a, b, c, d = [p.id for p in session.query(Product).order_by(Product.id)]
+    client = _client()
+    q = client.get("/api/dashboard/queue").json()
+    assert [p["id"] for p in q["queue"]] == [a, b, c, d] and q["batch_size"] == 10
+    assert client.post("/api/dashboard/queue/order", headers=HDR, json={"ids": [c, a]}).json()["order"] == [c, a]
+    assert client.post(f"/api/dashboard/queue/{d}/next", headers=HDR).status_code == 200
+    assert [p["id"] for p in client.get("/api/dashboard/queue").json()["queue"]] == [d, c, a, b]
+
+    CreatorAgent(batch_size=2).run()  # builds the top two, in order
+    session.expire_all()
+    built = [p.id for p in session.query(Product).filter(Product.state == ProductState.CREATED)]
+    assert sorted(built) == sorted([d, c])
+    assert [p["id"] for p in client.get("/api/dashboard/queue").json()["queue"]] == [a, b]
+
+
+def test_stop_ends_a_run_after_the_current_item(session, monkeypatch):
+    from pipeline.agents.creator import CreatorAgent
+    from pipeline.db.models import Product, ProductState, Run
+
+    for i in range(3):
+        session.add(Product(state="brief", niche="n", product_type="spreadsheet", brief_json={"concept": f"Idea {i}"}))
+    session.commit()
+    client = _client()
+    assert client.post("/api/dashboard/agents/creator/stop", headers=HDR).status_code == 409  # not running
+    assert client.post("/api/dashboard/agents/qa/stop", headers=HDR).status_code == 404
+
+    original = CreatorAgent.report_progress
+    calls = []
+
+    def progress_then_press_stop(self):
+        original(self)
+        calls.append(1)
+        if len(calls) == 1:  # the owner presses Stop after the first product is built, mid-run
+            working = client.get("/api/dashboard/overview").json()["working"]
+            assert working and working[0]["agent"] == "creator" and working[0]["items"] == 1
+            assert client.post("/api/dashboard/agents/creator/stop", headers=HDR).status_code == 200
+            assert client.get("/api/dashboard/overview").json()["working"][0]["stop_requested"]
+
+    monkeypatch.setattr(CreatorAgent, "report_progress", progress_then_press_stop)
+    outcome = CreatorAgent().run()
+    session.expire_all()
+    assert outcome.status == "stopped" and outcome.items_processed == 1 and len(calls) == 1
+    assert session.query(Product).filter(Product.state == ProductState.CREATED).count() == 1
+    assert session.query(Product).filter(Product.state == ProductState.BRIEF, Product.locked_by.is_(None)).count() == 2
+    run = session.query(Run).filter(Run.agent == "creator").one()
+    assert run.status == "stopped" and run.stop_requested_at is not None
+    assert client.get("/api/dashboard/overview").json()["working"] == []
+
+
+def test_stop_the_researcher_between_niches(session, monkeypatch):
+    from pipeline.agents.researcher import ResearcherAgent
+    from pipeline.db.models import Product
+
+    client = _client()
+    original = ResearcherAgent.report_progress
+
+    def progress_then_stop(self):
+        original(self)
+        client.post("/api/dashboard/agents/researcher/stop", headers=HDR)
+
+    monkeypatch.setattr(ResearcherAgent, "report_progress", progress_then_stop)
+    outcome = ResearcherAgent().run()
+    session.expire_all()
+    niches = {p.niche for p in session.query(Product)}
+    assert outcome.status == "stopped" and len(niches) == 1 and outcome.items_processed >= 1

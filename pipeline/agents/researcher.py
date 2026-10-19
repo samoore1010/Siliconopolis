@@ -88,12 +88,16 @@ class ResearcherAgent(Agent):
 
         per_niche = max(1, min(remaining, 20) // len(niches))
         for niche in niches:
+            if self.should_stop():
+                break
             if remaining <= 0:
                 self.log.warning("weekly brief cap reached mid-run; stopping", cap=self.settings.weekly_brief_cap)
                 break
             remaining -= self._research_niche(session, niche, min(per_niche, remaining))
+            session.commit()  # keep each niche's ideas even if a later niche fails or you press Stop
+            self.report_progress()
 
-        session.add(ResearchNote(source="researcher", content=f"Run {self.run_id}: created {self.items_processed} briefs across {len(niches)} niches."))
+        session.add(ResearchNote(source="researcher", content=f"Run {self.run_id}{' (stopped early by the owner)' if self.stopped else ''}: created {self.items_processed} briefs across {len(niches)} niches."))
 
     def _run_brief(self, session: Session, brief: ResearchRequest, all_types: list[str], remaining: int) -> None:
         brief.status, brief.run_id, brief.started_at = BriefStatus.RUNNING, self.run_id, utcnow()

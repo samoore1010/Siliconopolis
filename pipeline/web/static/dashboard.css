@@ -275,3 +275,25 @@ details.group summary .more { color: var(--accent); font-size: 13px; margin-left
 details.group ul { list-style: none; margin: 6px 0 2px; padding: 0 0 0 12px; border-left: 2px solid var(--line); }
 details.group li { display: block; border: 0; padding: 3px 0; font-size: 13.5px; }
 @media (max-width: 760px) { .app { background: none; } .nav { background: var(--sunken); } }
+
+/* ---------- working now & build queue ---------- */
+.working { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.live { display: grid; grid-template-columns: 12px 1fr auto; gap: 14px; align-items: center; padding: 14px 16px; border-color: var(--accent); }
+.pulse { width: 10px; height: 10px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 0 var(--good); animation: pulse 1.6s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 55%, transparent); } 70% { box-shadow: 0 0 0 9px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+.queue-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.qrow { display: grid; grid-template-columns: 18px 28px 1fr auto; gap: 10px; align-items: center; padding: 10px 12px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 12px; }
+.qrow.building { grid-template-columns: 12px 1fr; border-color: var(--accent); }
+.qrow.dragging { opacity: .5; border-style: dashed; }
+.qrow .grip { color: var(--muted); cursor: grab; letter-spacing: -2px; user-select: none; }
+.qrow .pos { font-weight: 700; color: var(--muted); text-align: right; }
+.qrow .qmain { cursor: pointer; min-width: 0; } .qrow .qmain .t { font-weight: 600; }
+.qrow .qacts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.queue-list .cut { text-align: center; color: var(--muted); font-size: 13px; padding: 6px; border-top: 2px dashed var(--line); margin-top: 4px; }
+@media (max-width: 760px) {
+  .live { grid-template-columns: 12px 1fr; } .live .btn, .live > .muted { grid-column: 2; justify-self: start; }
+  .qrow { grid-template-columns: 24px 1fr; } .qrow .grip { display: none; } .qrow .qacts { grid-column: 1 / -1; justify-content: flex-start; }
+}
+#working:not(:empty) { margin-bottom: 22px; }
