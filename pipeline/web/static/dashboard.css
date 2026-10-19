@@ -142,3 +142,34 @@ ol.reasons { margin: 6px 0 0; padding-left: 20px; } ol.reasons li { margin: 6px 
 .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 20; display: grid; place-items: center; cursor: zoom-out; }
 .lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 8px; }
 pre.spec { white-space: pre-wrap; font-size: 12.5px; background: var(--bg); padding: 10px; border-radius: 8px; max-height: 260px; overflow: auto; }
+
+/* ---------- owner input ---------- */
+.direction { margin: 12px 0 4px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.direction input, .feedback textarea { flex: 1; min-width: 220px; font: inherit; color: var(--ink); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
+.feedback textarea { width: 100%; box-sizing: border-box; resize: vertical; margin: 8px 0; }
+.direction input:focus, .feedback textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn { font: inherit; font-weight: 600; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  border-radius: 10px; padding: 8px 14px; cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn:not(:disabled):hover { filter: brightness(1.05); }
+.link { border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; font-size: 13px; padding: 0 4px; }
+.link.danger { color: var(--bad); }
+.msg { font-size: 13px; }
+.directives { list-style: none; margin: 12px 0 0; padding: 0; }
+.directives li { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 9px 0;
+  border-top: 1px solid var(--line); }
+.directives li .txt { font-weight: 600; }
+.directives li.paused .txt { color: var(--muted); text-decoration: line-through; }
+.comments { list-style: none; margin: 0; padding: 0; }
+.comments li { padding: 8px 0; border-top: 1px solid var(--line); }
+.comments li:first-child { border-top: 0; }
+.comments time { color: var(--muted); font-size: 12px; margin-left: 8px; }
+.comments p { margin: 4px 0 0; white-space: pre-wrap; }
+.pill.rev { background: var(--accent-soft); color: var(--ink); }
+.card .why-rev { font-size: 12.5px; background: var(--accent-soft); border-radius: 8px; padding: 6px 8px; }
+.qa-verdict { font-style: italic; }
+.score.biz span:first-child { font-weight: 700; }
+@media (max-width: 700px) { .directives li { grid-template-columns: 1fr; gap: 4px; } }

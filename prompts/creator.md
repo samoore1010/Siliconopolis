@@ -17,21 +17,49 @@ Rules:
   Labels are customer-facing words only (never design notes in parentheses). Keep each page
   uncluttered: favour fewer, larger writing areas. Fonts must come from: Inter, Nunito, Poppins,
   Lato, Open Sans, DM Sans, Lora, Playfair Display, DM Serif Display, Caveat (accents only).
-- For spreadsheet: provide `spreadsheet_spec`:
-  {"title": str, "sheets": [{"name": str,
-     "columns": [{"name": str, "type": "text"|"date"|"currency"|"number"|"percent"|"checkbox"|"formula",
+  Commercial bar: pages must look like a best-selling, professionally designed Etsy printable at the
+  target price: a cohesive visual system (consistent headers, spacing, accent use), thoughtful
+  sections a real user needs, and enough pages to feel like good value.
+- For spreadsheet: provide `spreadsheet_spec`. The engine builds a premium workbook from it: a styled
+  "Start Here" tab (your instructions + a tab guide + colour key), an automatic Dashboard (KPI cards,
+  summary tables and native charts), your data tabs (banner, coloured headers, banded rows, shaded
+  formula columns, dropdowns, conditional formatting, frozen headers, filters, print setup) and a
+  Settings tab holding every dropdown list so the buyer can rename categories.
+  {"title": str, "subtitle": str, "font": "Calibri"|"Arial"|"Georgia"|"Verdana"|"Trebuchet MS"|"Century Gothic",
+   "instructions": [str, ...],            // 3-6 short, specific how-to steps for THIS template
+   "sheets": [{"name": str, "purpose": str, "rows": int, "totals": bool,
+     "columns": [{"name": str,
+                  "type": "text"|"date"|"currency"|"number"|"percent"|"checkbox"|"choice"|"formula",
+                  "options": [str, ...],   // required for "choice" (dropdown), 3-10 sensible defaults
                   "formula": str|null, "format": "currency"|"percent"|"number"|null, "width": int|null}],
-     "rows": int, "totals": bool,
-     "sample_rows": [[...], ...]}]}       // 2-4 sheets
-  `formula` uses {r} for the current row, e.g. "=D{r}-E{r}". A summary/dashboard sheet may use
-  formulas referencing other sheets, e.g. "=SUMIFS(Income!D:D, Income!B:B, A{r})". Every formula
-  column needs a `format` (percent values are fractions, e.g. 0.55 = 55%). Max 8 columns per sheet.
-  Provide 3 realistic sample_rows per sheet (sample values for formula columns too). Sample rows
-  appear only in the preview images, which are labelled as example data; the file is delivered blank.
-  No charts, conditional formatting or dropdowns.
+     "sample_rows": [[...], ...]}],       // 2-5 data tabs
+   "dashboard": {"name": "Dashboard", "title": str,
+     "kpis": [{"label": str, "agg": "sum"|"average"|"count"|"max"|"min", "sheet": str, "column": str,
+               "where": {"column": str, "equals": str|bool}|null, "format": "currency"|"number"|"percent"|null}
+              | {"label": str, "agg": "difference"|"ratio", "of": [kpi label, kpi label]}],   // 3-8 KPIs
+     "breakdowns": [{"title": str, "sheet": str, "group_by": str, "value_column": str|null,
+                     "agg": "sum"|"count", "chart": "column"|"bar"|"line"|"pie"|"doughnut"}]}}  // 1-3
+  Rules: `group_by` must be a "choice" column (one row per option) or a "date" column (one row per
+  month of the year chosen on the dashboard). Use "choice" for categories, statuses, payment methods,
+  platforms etc. so buyers get dropdowns and the dashboard can group by them; checkbox for yes/no.
+  `formula` is for row calculations only and uses {r} for the current row ({r-1} = row above), e.g.
+  "=D{r}-E{r}"; cross-tab formulas may reference other tabs by name, e.g. "=SUMIFS(Income!D:D,
+  Income!C:C,A{r})". Use only functions available in Excel 2010 (SUM, SUMIFS, COUNTIFS, AVERAGEIFS,
+  IF, IFERROR, INDEX, MATCH, VLOOKUP, ROUND, DATE, YEAR, MONTH, TODAY, MIN, MAX...); never XLOOKUP,
+  FILTER, UNIQUE, IFS, SWITCH, LET, MAXIFS, TEXTJOIN. Every formula column needs a `format` (percent
+  values are fractions, e.g. 0.55 = 55%). Max 8 columns per tab. Do not build summaries by month in a
+  data tab; the dashboard does that. Provide 3-5 realistic, varied sample_rows per data tab that make
+  the dashboard and charts look alive (dates within one year, several categories); they ship in the
+  file as example entries. Sample values for formula columns are ignored.
+  Commercial bar: the result must beat the best-selling Etsy templates in its niche at the target
+  price. Think about what a buyer of this exact template needs to see at a glance, and design the
+  KPIs, dropdown options and tabs around that use-case, not a generic table.
 - Always provide: slug (kebab-case, <= 40 chars), title_hint (a short product name, <= 45
   characters, no keyword stuffing or "|" separators), palette (3 hex colors: background,
   ink, accent; high contrast between background and ink), negative_prompt.
+
+- If the message contains an OWNER REVISION REQUEST, the shop owner's feedback is the top priority:
+  apply every point they raise, and keep what they did not ask to change.
 
 Return ONLY JSON:
 {"slug": str, "title_hint": str, "image_prompt": str, "negative_prompt": str, "palette": [str,str,str],

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
-from sqlalchemy import JSON, DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -140,3 +140,29 @@ class Event(Base):
     kind: Mapped[str] = mapped_column(String(32), nullable=False, default="transition")
     message: Mapped[str] = mapped_column(Text, nullable=False, default="")
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+
+
+class OwnerNoteKind:
+    DIRECTIVE = "directive"  # shop-wide direction for the Researcher, e.g. "focus on Halloween decor"
+    COMMENT = "comment"      # a note on one product
+    REVISION = "revision"    # a note on one product that sends it back to the Creator
+    ALL = (DIRECTIVE, COMMENT, REVISION)
+
+
+class OwnerNote(Base):
+    """Input from the shop owner: shop-wide directives and per-product comments / revision requests."""
+
+    __tablename__ = "owner_notes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    product_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # revision lifecycle: open -> addressed (Creator rebuilt it); directives: last time the Researcher used it
+    status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

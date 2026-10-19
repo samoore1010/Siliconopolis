@@ -229,26 +229,11 @@ class MockLLM(LLMClient):
                          "elements": ["6 habit rows each with 7 circles labelled M T W T F S S"]},
                     ],
                 },
-                "spreadsheet_spec": {
-                    "title": short.title(),
-                    "sheets": [
-                        {"name": "Income", "rows": 100, "totals": True,
-                         "columns": [{"name": "Date", "type": "date"}, {"name": "Client", "type": "text"},
-                                     {"name": "Description", "type": "text"}, {"name": "Amount", "type": "currency"},
-                                     {"name": "Paid?", "type": "checkbox"}],
-                         "sample_rows": [["2026-01-05", "Maple Studio", "Logo refresh", 450, True],
-                                         ["2026-01-12", "Birch & Co", "Monthly retainer", 1200, False]]},
-                        {"name": "Expenses", "columns": ["Date", "Vendor", "Category", "Amount", "Receipt?"],
-                         "sample_rows": [["2026-01-03", "Paper Supply", "Materials", 38.5, True]]},
-                        {"name": "Summary", "totals": False,
-                         "columns": [{"name": "Month", "type": "text"}, {"name": "Income", "type": "currency"},
-                                     {"name": "Expenses", "type": "currency"},
-                                     {"name": "Profit", "type": "formula", "formula": "=B{r}-C{r}"}],
-                         "sample_rows": [["January", 1650, 38.5, 1611.5]]},
-                    ],
-                },
+                "spreadsheet_spec": _mock_sheet_spec(short.title()),
                 "product_type": product_type,
             }
+        if task == "creator_sheet_fix":
+            return _mock_sheet_spec("Fixed Workbook")
         if task in ("creator_page_html", "creator_page_fix"):
             return ("```html\n<html><head><style>.page{padding:.6in;background:#F7F3EC;display:flex;flex-direction:column;gap:.3in}"
                     "h1{font-family:Poppins,sans-serif;margin:0}.box{flex:1;border:3px solid #A3B18A;border-radius:18px}"
@@ -260,7 +245,10 @@ class MockLLM(LLMClient):
         if task == "qa_vision":
             return {
                 "pass": True,
-                "scores": {"quality": 8, "legibility": 9, "artifacts": 9, "matches_brief": 8},
+                "scores": {"quality": 8, "legibility": 9, "artifacts": 9, "matches_brief": 8,
+                           "design_polish": 8, "commercial_viability": 8},
+                "verdict": "Mock QA: would hold its own against typical listings at this price.",
+                "improvements": [],
                 "ip_concerns": [],
                 "reasons": ["Mock QA: placeholder images render, no text artifacts, matches brief."],
             }
@@ -294,6 +282,38 @@ class MockLLM(LLMClient):
         if task == "classify":
             return {"label": "ok", "confidence": 0.9}
         return {"ok": True}
+
+
+def _mock_sheet_spec(title: str) -> dict[str, Any]:
+    return {
+        "title": title, "subtitle": "Income, expenses and profit at a glance", "font": "Calibri",
+        "instructions": ["Rename your categories on the Settings tab.", "Log sales on Income and costs on Expenses.",
+                         "Check the Dashboard for totals and charts."],
+        "sheets": [
+            {"name": "Income", "purpose": "Every payment you receive", "rows": 100, "totals": True,
+             "columns": [{"name": "Date", "type": "date"}, {"name": "Client", "type": "text"},
+                         {"name": "Category", "type": "choice", "options": ["Services", "Products", "Other"]},
+                         {"name": "Amount", "type": "currency"}, {"name": "Paid?", "type": "checkbox"}],
+             "sample_rows": [["2026-01-05", "Maple Studio", "Services", 450, True],
+                             ["2026-02-12", "Birch & Co", "Products", 1200, False]]},
+            {"name": "Expenses", "purpose": "Every business cost",
+             "columns": [{"name": "Date", "type": "date"}, {"name": "Vendor", "type": "text"},
+                         {"name": "Category", "type": "choice", "options": ["Supplies", "Software", "Marketing"]},
+                         {"name": "Amount", "type": "currency"}, {"name": "Receipt?", "type": "checkbox"}],
+             "sample_rows": [["2026-01-03", "Paper Supply", "Supplies", 38.5, True]]},
+            {"name": "Mileage Log", "purpose": "Business trips", "totals": True,
+             "columns": [{"name": "Date", "type": "date"}, {"name": "Miles", "type": "number"},
+                         {"name": "Rate", "type": "currency"},
+                         {"name": "Deduction", "type": "formula", "formula": "=B{r}*C{r}", "format": "currency"}],
+             "sample_rows": [["2026-01-09", 42, 0.7, 29.4]]},
+        ],
+        "dashboard": {"name": "Dashboard", "kpis": [
+            {"label": "Income", "agg": "sum", "sheet": "Income", "column": "Amount"},
+            {"label": "Expenses", "agg": "sum", "sheet": "Expenses", "column": "Amount"},
+            {"label": "Profit", "agg": "difference", "of": ["Income", "Expenses"]}],
+            "breakdowns": [{"title": "Income by month", "sheet": "Income", "group_by": "Date",
+                            "value_column": "Amount", "agg": "sum", "chart": "column"}]},
+    }
 
 
 def _grab(text: str, pattern: str) -> str | None:
