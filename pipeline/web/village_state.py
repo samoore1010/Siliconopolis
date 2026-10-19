@@ -34,12 +34,12 @@ INPUT_STATE = {"researcher": None, "creator": ProductState.BRIEF, "qa": ProductS
 SERVICE_FOR_AGENT = {"researcher": "researcher", "creator": "daily", "qa": "daily", "lister": "daily", "analyst": "analyst",
                      "fulfiller": "fulfiller"}
 AGENT_META = {
-    "researcher": {"title": "Researcher", "role": "finds demand, writes briefs", "schedule": "weekly, Mon 6:00 AM Phoenix"},
-    "creator": {"title": "Creator", "role": "makes files + listing images", "schedule": "daily, 7:00 AM Phoenix"},
-    "qa": {"title": "QA", "role": "vision check, IP + duplicate screen", "schedule": "daily, after Creator"},
-    "lister": {"title": "Lister", "role": "writes copy, creates Etsy drafts", "schedule": "daily, after QA"},
-    "analyst": {"title": "Analyst", "role": "reads sales, advises Researcher", "schedule": "weekly, Sun 8:00 PM Phoenix"},
-    "fulfiller": {"title": "Fulfiller", "role": "turns shirt/mug orders into print jobs", "schedule": "hourly"},
+    "researcher": {"title": "Researcher", "role": "finds what sells and proposes product ideas", "schedule": "weekly, Mon 6:00 AM Phoenix"},
+    "creator": {"title": "Creator", "role": "designs the product files and listing photos", "schedule": "daily, 7:00 AM Phoenix"},
+    "qa": {"title": "QA", "role": "checks quality, copyright and whether it would sell", "schedule": "daily, after Creator"},
+    "lister": {"title": "Lister", "role": "writes the Etsy listing and saves it as a draft", "schedule": "daily, after QA"},
+    "analyst": {"title": "Analyst", "role": "reads sales and tells the Researcher what works", "schedule": "weekly, Sun 8:00 PM Phoenix"},
+    "fulfiller": {"title": "Fulfiller", "role": "turns shirt and mug orders into print jobs", "schedule": "hourly"},
 }
 
 

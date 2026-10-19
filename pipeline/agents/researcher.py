@@ -11,13 +11,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pipeline.adapters.etsy import get_etsy_client
+from pipeline.db import session_scope
 from pipeline.db.models import (
-    OwnerNote,
-    OwnerNoteKind,
+    BriefStatus,
     Product,
     ProductState,
     ProductType,
     ResearchNote,
+    ResearchRequest,
     utcnow,
 )
 from pipeline.guardrails import CapReached, get_blocklist
@@ -25,8 +26,7 @@ from pipeline.guardrails.caps import remaining_weekly_briefs
 
 from .base import Agent
 
-DIRECTIVE_NICHE = "Owner direction"
-DIRECTIVE_SHARE = 0.5  # share of this run's ideas spent directly on the owner's directives
+BRIEF_NICHE = "Owner brief"
 
 
 class ResearcherAgent(Agent):
@@ -71,38 +71,56 @@ class ResearcherAgent(Agent):
         if not niches:
             self.log.warning("no niches eligible this run")
             return
-        directives = session.execute(select(OwnerNote).where(OwnerNote.kind == OwnerNoteKind.DIRECTIVE,
-                                                             OwnerNote.active.is_(True))
-                                     .order_by(OwnerNote.id.asc())).scalars().all()
-        directives_text = "\n".join(f"- {d.text}" for d in directives)
-        self.directives_block = (f"OWNER DIRECTIVES (the shop owner's current instructions; they come first):\n"
-                                 f"{directives_text}\n\n") if directives else ""
         self.notes_text, self.etsy, self.blocklist = notes_text, etsy, blocklist
         self.etsy_search_ok = etsy_search_ok
-        budget = min(remaining, 20)
+        self.brief_block = ""
+        self.added_ids: list[int] = []
         all_types = sorted({t for n in niches for t in n["product_types"]})
-        if directives:
-            share = max(1, round(budget * DIRECTIVE_SHARE)) if len(niches) else budget
-            keywords = [re.sub(r"^(focus on|more|make|try)\s+", "", d.text.strip(), flags=re.I)[:60] for d in directives][:3]
-            focus = {"name": DIRECTIVE_NICHE, "keywords": keywords, "product_types": all_types,
-                     "notes": "Ideas that carry out the owner's directives. Each brief must include a short "
-                              "`niche` name (e.g. 'halloween decor'); new niches are welcome."}
-            remaining -= self._research_niche(session, focus, min(share, remaining))
-            for d in directives:
-                d.used_at = utcnow()
-            budget = max(0, budget - share)
-        per_niche = max(1, budget // len(niches)) if budget else 0
+
+        # A queued run brief from the owner takes over this whole run (and only this run).
+        brief = session.execute(select(ResearchRequest).where(ResearchRequest.status == BriefStatus.QUEUED)
+                                .order_by(ResearchRequest.created_at.asc()).limit(1)).scalar_one_or_none()
+        if brief is not None:
+            self._run_brief(session, brief, all_types, remaining)
+            session.add(ResearchNote(source="researcher", content=(
+                f"Run {self.run_id}: owner brief #{brief.id} ({brief.focus[:120]}): created {self.items_processed} briefs.")))
+            return
+
+        per_niche = max(1, min(remaining, 20) // len(niches))
         for niche in niches:
-            if remaining <= 0 or per_niche <= 0:
-                if remaining <= 0:
-                    self.log.warning("weekly brief cap reached mid-run; stopping", cap=self.settings.weekly_brief_cap)
+            if remaining <= 0:
+                self.log.warning("weekly brief cap reached mid-run; stopping", cap=self.settings.weekly_brief_cap)
                 break
             remaining -= self._research_niche(session, niche, min(per_niche, remaining))
 
         session.add(ResearchNote(source="researcher", content=f"Run {self.run_id}: created {self.items_processed} briefs across {len(niches)} niches."))
 
-    def _research_niche(self, session: Session, niche: dict, n: int) -> int:
-        """Research one niche (or the owner's directives) and add up to `n` briefs. Returns briefs added."""
+    def _run_brief(self, session: Session, brief: ResearchRequest, all_types: list[str], remaining: int) -> None:
+        brief.status, brief.run_id, brief.started_at = BriefStatus.RUNNING, self.run_id, utcnow()
+        types = [t for t in (brief.product_types or []) if t in all_types] or all_types
+        n = max(1, min(int(brief.idea_count or 6), remaining, 20))
+        parts = [p.strip() for p in re.split(r"[\n,;]+", brief.focus) if p.strip()]
+        keywords = [re.sub(r"^(focus on|more|make|try|ideas for)\s+", "", p, flags=re.I)[:60] for p in parts][:3]
+        self.brief_block = (f"OWNER RUN BRIEF (this whole run is dedicated to it; follow it over the niche list):\n"
+                            f"{brief.focus}\n\n")
+        focus = {"name": BRIEF_NICHE, "keywords": keywords or [brief.focus[:60]], "product_types": types,
+                 "notes": "Ideas that carry out the owner's run brief. Each brief must include a short `niche` "
+                          "name (e.g. 'halloween decor'); new niches are welcome."}
+        try:
+            self._research_niche(session, focus, n, brief_id=brief.id)
+        except Exception as e:
+            with session_scope() as s2:  # survives the rollback: the brief stays queued for the next run
+                row = s2.get(ResearchRequest, brief.id)
+                if row:
+                    row.note = f"Run #{self.run_id} failed ({str(e)[:160]}); it will be retried on the next run."
+            raise
+        brief.status, brief.finished_at = BriefStatus.DONE, utcnow()
+        brief.product_ids = [str(i) for i in self.added_ids]
+        brief.note = ("" if len(self.added_ids) >= int(brief.idea_count or 0) else
+                      f"Made {len(self.added_ids)} of {brief.idea_count} ideas (weekly idea limit or rejected ideas).")
+
+    def _research_niche(self, session: Session, niche: dict, n: int, brief_id: int | None = None) -> int:
+        """Research one niche (or the owner's run brief) and add up to `n` briefs. Returns briefs added."""
         added = 0
         signals = []
         for kw in niche.get("keywords", [])[:3]:
@@ -124,7 +142,7 @@ class ResearcherAgent(Agent):
             catalog_note = (f"In-house products our print shop can make (each physical brief must name one `item`):\n"
                             f"{json.dumps(items, indent=1)}\n\n")
         user = (
-            f"{self.directives_block}{catalog_note}"
+            f"{self.brief_block}{catalog_note}"
             f"Niche config:\n{json.dumps({'niche': niche.get('name'), 'product_types': niche.get('product_types'), 'notes': niche.get('notes')}, indent=2)}\n\n"
             f"Recent analyst/research notes:\n{self.notes_text}\n\n"
             f"Demand signals from Etsy listing search (use only for keywords/price/popularity, never copy):\n"
@@ -146,7 +164,7 @@ class ResearcherAgent(Agent):
             "etsy_data": bool(signals), "signals_count": len(signals),
             "signals_sample": sorted(signals, key=lambda x: -(x.get("num_favorers") or 0))[:8],
             "keywords": niche.get("keywords", []), "product_types": niche.get("product_types"),
-            "directives": bool(self.directives_block),
+            "brief_id": brief_id,
         }))
         session.add(market_note)
         session.flush()
@@ -166,13 +184,15 @@ class ResearcherAgent(Agent):
                 self.log.warning("skipping brief: blocklist hit", hits=hits)
                 continue
             niche_name = str(niche.get("name"))
-            if niche_name == DIRECTIVE_NICHE and str(brief.get("niche") or "").strip():
+            if niche_name == BRIEF_NICHE and str(brief.get("niche") or "").strip():
                 niche_name = str(brief["niche"]).strip()[:120]
             product = Product(state=ProductState.BRIEF, niche=niche_name, product_type=ptype,
                               brief_json={**brief, "niche": niche_name, "run_id": self.run_id, "market": market_ref,
-                                          **({"from_directive": True} if niche.get("name") == DIRECTIVE_NICHE else {})})
+                                          **({"from_brief": brief_id} if brief_id else {})})
             product.add_cost(result.cost_usd / max(1, len(briefs)))
             session.add(product)
+            session.flush()
+            self.added_ids.append(product.id)
             self.items_processed += 1
             added += 1
         session.flush()

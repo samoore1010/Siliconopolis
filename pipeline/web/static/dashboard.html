@@ -3,84 +3,33 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Siliconopolis Dashboard</title>
+  <title>Siliconopolis</title>
   <link rel="stylesheet" href="/static/dashboard.css">
 </head>
 <body>
-  <header class="top">
-    <div class="brand"><span class="logo">◆</span> Siliconopolis <span class="sub">your Etsy agent team</span></div>
-    <nav class="tabs" role="tablist">
-      <button data-tab="overview" class="on">Overview</button>
-      <button data-tab="products">Products</button>
-      <button data-tab="research">Market research</button>
-      <a href="/print" class="village">Print queue ↗</a>
-      <a href="/village" class="village">Village view ↗</a>
-      <a href="/status" class="village">System status</a>
-    </nav>
-    <div class="env" id="env"></div>
-  </header>
+  <div class="app">
+    <aside class="nav" aria-label="Main">
+      <div class="brand"><span class="logo"></span><span>Siliconopolis</span></div>
+      <nav>
+        <a href="#home" data-route="home"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg><span>Home</span><b class="count" id="n-home"></b></a>
+        <a href="#products" data-route="products"><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg><span>Products</span></a>
+        <a href="#research" data-route="research"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg><span>Research</span><b class="count" id="n-research"></b></a>
+        <a href="#orders" data-route="orders"><svg viewBox="0 0 24 24"><path d="M4 7h16l-1.5 12a1 1 0 0 1-1 .9h-11a1 1 0 0 1-1-.9zM9 7a3 3 0 0 1 6 0"/></svg><span>Orders</span><b class="count" id="n-orders"></b></a>
+        <a href="#team" data-route="team"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14.2A6.5 6.5 0 0 1 21.5 20"/></svg><span>Team</span></a>
+      </nav>
+      <div class="nav-foot"><div id="env" style="display:contents"></div><a href="/status">System status</a></div>
+    </aside>
+    <main id="view" tabindex="-1"></main>
+  </div>
 
-  <main>
-    <!-- OVERVIEW -->
-    <section id="tab-overview" class="tab on">
-      <div id="attention"></div>
-      <div class="panel direction">
-        <h2 class="h">Your direction for the team</h2>
-        <p class="hint">Tell the Researcher what to focus on, e.g. “Focus on Halloween decor” or “More spreadsheets for wedding planners, no wall art”. Half of each research run goes to your directions; it can open new niches for them.</p>
-        <form id="directive-form" class="row">
-          <input id="directive-text" maxlength="2000" placeholder="Focus on Halloween decor" aria-label="New direction">
-          <button class="btn primary" type="submit">Add</button>
-          <span class="msg" id="directive-msg"></span>
-        </form>
-        <ul class="directives" id="directives"></ul>
-      </div>
-      <h2 class="h">Where every product is</h2>
-      <p class="hint">Products move left to right. Click a stage to see the products in it.</p>
-      <div class="stages" id="stages"></div>
-      <div class="grid2">
-        <div class="panel">
-          <h2 class="h">What the agents did</h2>
-          <ul class="activity" id="activity"></ul>
-        </div>
-        <div>
-          <div class="panel">
-            <h2 class="h">Spend and limits</h2>
-            <div class="kv" id="spend"></div>
-          </div>
-          <div class="panel">
-            <h2 class="h">Agents</h2>
-            <table class="agents" id="agents"></table>
-            <p class="hint small">Researcher runs Mondays 6 AM; Creator → QA → Lister run daily at 7 AM; Analyst Sundays 8 PM; Fulfiller checks for shirt/mug orders hourly (Phoenix time).</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- PRODUCTS -->
-    <section id="tab-products" class="tab">
-      <div class="toolbar">
-        <div class="chips" id="stage-chips"></div>
-        <input id="search" type="search" placeholder="Search products, niches…" aria-label="Search products">
-      </div>
-      <div class="cards" id="cards"></div>
-      <p class="empty" id="cards-empty" hidden>No products here yet.</p>
-    </section>
-
-    <!-- RESEARCH -->
-    <section id="tab-research" class="tab">
-      <p class="hint">Each time the Researcher runs, it studies every niche and writes this analysis before proposing product ideas.</p>
-      <div id="market"></div>
-      <p class="empty" id="market-empty" hidden>No market analyses yet. They appear after the next Researcher run.</p>
-    </section>
-  </main>
-
-  <!-- PRODUCT DETAIL -->
   <div class="scrim" id="scrim" hidden></div>
-  <aside class="drawer" id="drawer" aria-hidden="true">
+  <aside class="drawer" id="drawer" aria-hidden="true" aria-label="Details">
     <button class="close" id="close" aria-label="Close">×</button>
     <div id="detail"></div>
   </aside>
+  <div class="modal" id="modal" hidden><div class="modal-card" role="dialog" aria-modal="true"></div></div>
   <div class="lightbox" id="lightbox" hidden><img alt=""></div>
+  <div class="toast" id="toast" hidden></div>
 
   <script src="/static/dashboard.js"></script>
 </body>

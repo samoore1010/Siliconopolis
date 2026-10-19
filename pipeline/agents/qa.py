@@ -103,7 +103,7 @@ class QAAgent(Agent):
         ).all()
         for other_id, other_hash in others:
             if other_hash and hamming(product.phash, other_hash) <= PHASH_DISTANCE_THRESHOLD:
-                return {"pass": False, "reasons": [f"near-duplicate of product {other_id} (phash distance <= {PHASH_DISTANCE_THRESHOLD})"],
+                return {"pass": False, "reasons": [f"Too similar to product #{other_id}, which is already approved or on Etsy (near-duplicate image)"],
                         "scores": {}, "checks": {"duplicate": "fail"}}
 
         # 3. the delivered file itself: must open cleanly, and QA looks at what the buyer actually gets

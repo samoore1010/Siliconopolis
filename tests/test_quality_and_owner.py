@@ -147,25 +147,68 @@ def test_revision_refused_for_etsy_drafts(session):
     assert r.status_code == 409 and "Etsy" in r.json()["detail"]
 
 
-def test_directives_steer_the_researcher(session):
-    from pipeline.agents.researcher import DIRECTIVE_NICHE, ResearcherAgent
-    from pipeline.db.models import OwnerNote, Product
+def test_run_brief_steers_exactly_one_research_run(session):
+    from pipeline.agents.researcher import BRIEF_NICHE, ResearcherAgent
+    from pipeline.db.models import BriefStatus, Product, ResearchRequest
     from pipeline.llm import get_llm
 
     c = _client()
-    d = c.post("/api/dashboard/directives", json={"text": "Focus on Halloween decor"}, headers=HDR).json()["directive"]
-    paused = c.post("/api/dashboard/directives", json={"text": "Wedding stuff"}, headers=HDR).json()["directive"]
-    assert c.patch(f"/api/dashboard/directives/{paused['id']}", json={"active": False}, headers=HDR).json()["directive"]["active"] is False
-    ResearcherAgent().run()
+    assert c.post("/api/dashboard/research/briefs", json={"focus": "Halloween decor"}).status_code == 403  # header
+    b = c.post("/api/dashboard/research/briefs", headers=HDR,
+               json={"focus": "Halloween decor, cute not scary", "product_types": ["mug", "nonsense"], "idea_count": 3}).json()["brief"]
+    assert b["status"] == "queued" and b["product_types"] == ["mug"]
+    second = c.post("/api/dashboard/research/briefs", headers=HDR, json={"focus": "Wedding planners"}).json()["brief"]
+    edited = c.patch(f"/api/dashboard/research/briefs/{second['id']}", headers=HDR,
+                     json={"focus": "Wedding seating spreadsheets", "idea_count": 2}).json()["brief"]
+    assert edited["focus"] == "Wedding seating spreadsheets"
+    assert [q["id"] for q in c.get("/api/dashboard/research").json()["queued"]] == [b["id"], second["id"]]
+
+    ResearcherAgent().run()  # uses ONLY the first brief
     calls = [x for x in get_llm().calls if x["task"] == "research_briefs"]
-    assert "OWNER DIRECTIVES" in calls[0]["user"] and "Halloween" in calls[0]["user"]
-    assert "Wedding" not in calls[0]["user"]
+    assert len(calls) == 1 and "OWNER RUN BRIEF" in calls[0]["user"] and "Halloween" in calls[0]["user"]
     session.expire_all()
-    assert session.query(Product).filter(Product.niche == DIRECTIVE_NICHE).count() >= 1
-    assert session.get(OwnerNote, d["id"]).used_at is not None
-    listed = c.get("/api/dashboard/directives").json()["directives"]
-    assert listed[0]["text"] == "Focus on Halloween decor" and listed[0]["used_at"]
-    assert c.delete(f"/api/dashboard/directives/{d['id']}", headers=HDR).status_code == 200
+    done = session.get(ResearchRequest, b["id"])
+    assert done.status == BriefStatus.DONE and len(done.product_ids) == 3
+    made = session.query(Product).filter(Product.id.in_([int(i) for i in done.product_ids])).all()
+    assert all(p.product_type == "mug" and p.brief_json["from_brief"] == b["id"] for p in made)
+    assert session.get(ResearchRequest, second["id"]).status == BriefStatus.QUEUED
+    assert c.patch(f"/api/dashboard/research/briefs/{b['id']}", headers=HDR, json={"focus": "x" * 5}).status_code == 409
+
+    research = c.get("/api/dashboard/research").json()
+    assert research["runs"][0]["brief"]["id"] == b["id"] and len(research["runs"][0]["ideas"]) == 3
+    assert c.delete(f"/api/dashboard/research/briefs/{second['id']}", headers=HDR).json()["brief"]["status"] == "cancelled"
+
+    ResearcherAgent().run()  # no brief left: back to the usual niche list
+    session.expire_all()
+    assert session.query(Product).filter(Product.niche == BRIEF_NICHE).count() <= 3
+    calls = [x for x in get_llm().calls if x["task"] == "research_briefs"]
+    assert len(calls) > 2 and not any("OWNER RUN BRIEF" in x["user"] for x in calls[1:])
+
+
+def test_delete_products_single_bulk_and_all_rejected(session):
+    from pipeline.db.models import Product
+    from pipeline.storage import get_storage
+
+    storage = get_storage()
+    keys = []
+    for i, state in enumerate(["rejected", "rejected", "brief", "drafted", "approved"]):
+        key = storage.put(f"products/{i}-x/listing-01-primary.png", b"png", "image/png")
+        storage.put(f"products/{i}-x/source/design.html", b"<html>", "text/html")
+        keys.append(key)
+        session.add(Product(state=state, niche="n", product_type="planner", brief_json={"concept": f"c{i}"},
+                            image_paths=[key]))
+    session.commit()
+    ids = [p.id for p in session.query(Product).order_by(Product.id)]
+    c = _client()
+    assert c.post("/api/dashboard/products/delete", json={"state": "rejected"}).status_code == 403
+    r = c.post("/api/dashboard/products/delete", headers=HDR, json={"state": "rejected"}).json()
+    assert sorted(r["deleted"]) == ids[:2] and not storage.exists(keys[0])
+    assert not storage.list("products/0-x/")  # whole product folder removed
+    r = c.post("/api/dashboard/products/delete", headers=HDR, json={"ids": ids[2:]}).json()
+    assert r["deleted"] == [ids[2], ids[4]] and r["skipped"][0]["id"] == ids[3]  # Etsy drafts stay
+    assert c.delete(f"/api/dashboard/product/{ids[3]}", headers=HDR).status_code == 409
+    session.expire_all()
+    assert [p.state for p in session.query(Product)] == ["drafted"]
 
 
 def test_qa_reviews_real_file_and_enforces_commercial_bar(session, monkeypatch):

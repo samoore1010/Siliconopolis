@@ -219,3 +219,32 @@ class FulfillmentOrder(Base):
     @property
     def owed(self) -> float:
         return round(float(self.unit_cost or 0) * int(self.quantity or 1), 2)
+
+
+class BriefStatus:
+    QUEUED = "queued"        # waiting for the next research run
+    RUNNING = "running"      # a research run is using it right now
+    DONE = "done"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+class ResearchRequest(Base):
+    """A run brief from the owner: steers exactly ONE research run, then is archived with its results."""
+
+    __tablename__ = "research_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+    focus: Mapped[str] = mapped_column(Text, nullable=False)
+    product_types: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)  # [] = any we make
+    idea_count: Mapped[int] = mapped_column(Integer, nullable=False, default=6)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=BriefStatus.QUEUED, index=True)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    product_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")

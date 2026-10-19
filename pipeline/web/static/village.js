@@ -7,6 +7,10 @@ const canvas = $("scene"), ctx = canvas.getContext("2d");
 ctx.imageSmoothingEnabled = false;
 const W = canvas.width, H = canvas.height;
 const POLL_MS = 4000;
+// ?embed=1: shown inside the app's Home page; clicks are handed to the app instead of local panels.
+const EMBED = new URLSearchParams(location.search).has("embed");
+if (EMBED) document.body.classList.add("embed");
+const tellApp = (msg) => window.parent.postMessage({ source: "village", ...msg }, location.origin);
 
 /* ---------------------------------------------------------------- isometric helpers */
 const TW = 84, TH = 42, ORIGIN = { x: W / 2, y: 70 };
@@ -256,7 +260,8 @@ function renderSidebar() {
     `<span class="badge">llm: ${env.llm_provider}</span>`, `<span class="badge">etsy: ${env.etsy_adapter}</span>`,
     state.stale_locks ? `<span class="badge warn">${state.stale_locks} stale lock(s)</span>` : "",
   ].join("");
-  $("hint").textContent = `updated ${new Date(state.generated_at).toLocaleTimeString()} · click a desk, the Brain, the outbox or the bin`;
+  $("hint").textContent = EMBED ? "live · click anyone to see what they're doing"
+    : `updated ${new Date(state.generated_at).toLocaleTimeString()} · click a desk, the Brain, the outbox or the bin`;
   $("legend").innerHTML = Object.keys(STATE_LABEL).map((k) => `<span><i style="background:${STATE_COLORS[k]}"></i>${STATE_LABEL[k]}</span>`).join("");
 }
 function setBar(id, pct, label) { const b = $(`${id}-bar`); b.style.width = pct + "%"; b.className = pct >= 100 ? "bad" : pct >= 75 ? "warn" : ""; $(`${id}-label`).textContent = label; }
@@ -277,6 +282,11 @@ canvas.addEventListener("click", (e) => {
   const r = canvas.getBoundingClientRect(); const x = ((e.clientX - r.left) / r.width) * W, y = ((e.clientY - r.top) / r.height) * H;
   const h = [...hit].reverse().find((b) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
   if (!h) return;
+  if (EMBED) {
+    if (h.kind === "agent") tellApp({ type: "agent", name: h.name });
+    else tellApp({ type: "route", route: h.kind === "outbox" ? "products/etsy" : h.kind === "rejects" ? "products/rejected" : "products" });
+    return;
+  }
   if (h.kind === "agent") openAgent(h.name); else if (h.kind === "outbox") openOutbox(); else if (h.kind === "rejects") openRejects(); else if (h.kind === "brain") openBrain();
 });
 $("feed").addEventListener("click", (e) => { const li = e.target.closest("li"); if (!li) return; if (li.dataset.pid) openProduct(+li.dataset.pid); else openAgent(li.dataset.agent); });
