@@ -25,3 +25,20 @@ niches:
       - income expense tracker excel
       - etsy seller bookkeeping template
     notes: Generic templates with formulas; no tax advice; US-agnostic.
+
+  # In-house products printed by the family print shop (see catalog.yaml for blanks/colours/sizes).
+  - name: personalized gift mugs                    # PLACEHOLDER
+    product_types: [mug]
+    keywords:
+      - personalized name mug
+      - custom mug gift for teacher
+      - funny personalized coffee mug
+    notes: Name/date personalization sells; giftable occasions (teachers, new parents, retirements, pets).
+
+  - name: custom occasion apparel                    # PLACEHOLDER
+    product_types: [apparel]
+    keywords:
+      - custom family reunion shirts
+      - personalized birthday shirt
+      - bachelorette party sweatshirt
+    notes: Group/occasion apparel with personalization (names, dates, cities). No slogans owned by brands, teams or shows.

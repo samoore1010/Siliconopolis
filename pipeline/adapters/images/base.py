@@ -26,7 +26,13 @@ class ImageProvider(ABC):
 
     @abstractmethod
     def generate(self, prompt: str, *, size: tuple[int, int] = (1024, 1024), style: str | None = None,
-                 negative_prompt: str | None = None, quality: str | None = None) -> GeneratedImage: ...
+                 negative_prompt: str | None = None, quality: str | None = None,
+                 transparent: bool = False) -> GeneratedImage: ...
+
+    def edit(self, prompt: str, image: bytes, *, size: tuple[int, int] = (1024, 1024),
+             quality: str | None = None) -> GeneratedImage:
+        """Turn an input image into a new one (e.g. a flat product mockup into a lifestyle photo)."""
+        raise NotImplementedError(f"{self.name} does not support image edits")
 
     @property
     def is_real(self) -> bool:

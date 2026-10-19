@@ -50,6 +50,21 @@ class Receipt:
 
 
 @dataclass
+class OrderLine:
+    """One line of a paid, unshipped Etsy order (a transaction on a receipt)."""
+    receipt_id: str
+    transaction_id: str
+    listing_id: str
+    title: str
+    quantity: int
+    variations: dict[str, str]
+    personalization: str
+    ship_to: dict[str, str]
+    created_at: str
+    buyer_note: str = ""
+
+
+@dataclass
 class ListingStats:
     listing_id: str
     views: int
@@ -85,6 +100,16 @@ class EtsyClient(ABC):
 
     @abstractmethod
     def update_listing(self, listing_id: str, payload: dict[str, Any]) -> DraftListing: ...
+
+    # --- in-house (physical) products
+    def get_open_orders(self, *, min_created: int | None = None) -> list[OrderLine]:
+        raise NotImplementedError
+
+    def update_listing_inventory(self, listing_id: str, inventory: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def create_receipt_shipment(self, receipt_id: str, *, carrier: str, tracking_code: str) -> dict[str, Any]:
+        raise NotImplementedError
 
     @abstractmethod
     def ping(self) -> None: ...

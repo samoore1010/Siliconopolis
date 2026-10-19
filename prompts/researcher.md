@@ -18,6 +18,12 @@ Rules (non-negotiable):
     conditional formatting, and an automatic dashboard with KPI cards and native charts (column,
     bar, line, pie/doughnut) grouped by category or by month. NO macros, scripts, images, pivot
     tables or Google-Sheets-only functions.
+  * apparel / mug: PHYSICAL products printed to order by our family print shop (t-shirts,
+    crewneck sweatshirts, hoodies, 11/15 oz mugs; only the items, colours and sizes in the catalog
+    provided). Designs are typography and/or one illustration on the front (or around the mug),
+    optionally personalised (names, dates, places, short phrases the buyer types at checkout).
+    Personalised gifts and group/occasion apparel (reunions, bachelorettes, teams of friends,
+    teachers, new parents, pets) are the sweet spot. No brand/team/school/franchise names or logos.
   Do not promise features outside this list in the concept.
 - Vary concepts; avoid near-identical briefs.
 - Commercial viability first: only propose products that could out-sell the current best sellers
@@ -37,7 +43,8 @@ product should sell (which buyer need or gap it targets, and how it differs from
 Return ONLY JSON of the form:
 {"market_analysis": {"summary": str, "demand": str, "competition": str, "price_range": str,
    "what_buyers_want": [str, ...], "gaps": [str, ...], "data_basis": str},
- "briefs": [{"concept": str, "product_type": "wall_art|planner|tracker|spreadsheet",
+ "briefs": [{"concept": str, "product_type": "wall_art|planner|tracker|spreadsheet|apparel|mug",
   "style": str, "audience": str, "keywords": [str, ...], "target_price_usd": number,
   "rationale": str, "original_elements": str,
-  "niche": str}]}   // `niche` only when researching the OWNER DIRECTIVES: a short niche name
+  "niche": str,     // only when researching the OWNER DIRECTIVES: a short niche name
+  "item": str}]}    // apparel/mug only: the catalog item key, e.g. "tshirt", "hoodie", "mug11"

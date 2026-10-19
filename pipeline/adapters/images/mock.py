@@ -21,7 +21,8 @@ def _font(size: int):
 class MockImageProvider(ImageProvider):
     name = "mock"
 
-    def generate(self, prompt, *, size=(1024, 1024), style=None, negative_prompt=None, quality=None) -> GeneratedImage:
+    def generate(self, prompt, *, size=(1024, 1024), style=None, negative_prompt=None, quality=None,
+                 transparent=False) -> GeneratedImage:
         w, h = size
         seed = hashlib.md5(prompt.encode()).digest()
         bg = (235 + seed[0] % 20, 230 + seed[1] % 20, 220 + seed[2] % 25)
@@ -52,6 +53,13 @@ class MockImageProvider(ImageProvider):
         img.save(buf, format="PNG", optimize=True)
         return GeneratedImage(data=buf.getvalue(), media_type="image/png", width=w, height=h,
                               cost_usd=0.0, model="mock-placeholder", metadata={"prompt": prompt, "style": style})
+
+    def edit(self, prompt, image, *, size=(1024, 1024), quality=None) -> GeneratedImage:
+        img = Image.open(io.BytesIO(image)).convert("RGB").resize(size)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return GeneratedImage(data=buf.getvalue(), media_type="image/png", width=size[0], height=size[1],
+                              cost_usd=0.0, model="mock-edit", metadata={"prompt": prompt})
 
     def ping(self) -> None:
         return None

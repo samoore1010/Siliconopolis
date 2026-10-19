@@ -19,8 +19,9 @@ from pipeline import __version__
 from pipeline.commands.status import collect_status, format_status
 from pipeline.config import get_settings
 from pipeline.logging_setup import configure_logging, get_logger
-from pipeline.web.auth import require_viewer
+from pipeline.web.auth import require_printer, require_viewer
 from pipeline.web.dashboard_api import router as dashboard_router
+from pipeline.web.print_api import router as print_router
 from pipeline.web.village_api import router as village_router
 
 settings = get_settings()
@@ -32,6 +33,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 app = FastAPI(title="Siliconopolis — Etsy Agent Pipeline", version=__version__)
 app.include_router(village_router)
 app.include_router(dashboard_router)
+app.include_router(print_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # In-memory PKCE verifier store for the OAuth helper flow (single owner; fine for v1).
@@ -46,6 +48,11 @@ def index():
 @app.get("/dashboard", response_class=HTMLResponse, dependencies=[Depends(require_viewer)])
 def dashboard():
     return FileResponse(STATIC_DIR / "dashboard.html", media_type="text/html")
+
+
+@app.get("/print", response_class=HTMLResponse, dependencies=[Depends(require_printer)])
+def print_queue():
+    return FileResponse(STATIC_DIR / "print.html", media_type="text/html")
 
 
 @app.get("/village", response_class=HTMLResponse, dependencies=[Depends(require_viewer)])

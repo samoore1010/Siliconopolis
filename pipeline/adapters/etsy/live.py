@@ -201,6 +201,42 @@ class LiveEtsyClient(EtsyClient):
         data = self._request("PATCH", f"/shops/{self.shop_id}/listings/{listing_id}", write=True, data=payload)
         return DraftListing(listing_id=str(listing_id), state=data.get("state", "draft"), title=data.get("title", ""), raw=data)
 
+    # ------------------------------------------------------------------ orders (in-house products)
+    def get_open_orders(self, *, min_created: int | None = None) -> list:
+        from .base import OrderLine
+
+        params: dict[str, Any] = {"was_paid": "true", "was_shipped": "false", "was_canceled": "false", "limit": 100}
+        if min_created:
+            params["min_created"] = min_created
+        data = self._request("GET", f"/shops/{self.shop_id}/receipts", params=params)
+        out = []
+        for r in data.get("results", []):
+            ship_to = {k: str(r.get(k) or "") for k in ("name", "first_line", "second_line", "city", "state", "zip",
+                                                         "country_iso")}
+            created = datetime.fromtimestamp(r.get("created_timestamp", 0), tz=UTC).isoformat()
+            for t in r.get("transactions", []):
+                variations, personalization = {}, ""
+                for v in t.get("variations") or []:
+                    name, value = str(v.get("formatted_name") or ""), str(v.get("formatted_value") or "")
+                    if name.lower().startswith("personali"):
+                        personalization = value
+                    else:
+                        variations[name] = value
+                out.append(OrderLine(receipt_id=str(r["receipt_id"]), transaction_id=str(t["transaction_id"]),
+                                     listing_id=str(t.get("listing_id")), title=str(t.get("title") or ""),
+                                     quantity=int(t.get("quantity") or 1), variations=variations,
+                                     personalization=personalization, ship_to=ship_to, created_at=created,
+                                     buyer_note=str(r.get("message_from_buyer") or "")))
+        return out
+
+    def update_listing_inventory(self, listing_id: str, inventory: dict[str, Any]) -> dict[str, Any]:
+        # TODO(owner): verify against Etsy's updateListingInventory docs (custom properties 513/514).
+        return self._request("PUT", f"/listings/{listing_id}/inventory", write=True, json=inventory)
+
+    def create_receipt_shipment(self, receipt_id: str, *, carrier: str, tracking_code: str) -> dict[str, Any]:
+        return self._request("POST", f"/shops/{self.shop_id}/receipts/{receipt_id}/tracking", write=True,
+                             data={"tracking_code": tracking_code, "carrier_name": carrier})
+
     @property
     def api_key_header(self) -> str:
         # Etsy Open API v3: "x-api-key: <keystring>:<shared_secret>"

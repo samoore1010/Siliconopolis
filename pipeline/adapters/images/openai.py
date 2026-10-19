@@ -49,15 +49,17 @@ class OpenAIImageProvider(ImageProvider):
         self._http = httpx.Client(base_url=API, timeout=timeout,
                                   headers={"Authorization": f"Bearer {api_key}"})
 
-    def generate(self, prompt, *, size=(1024, 1024), style=None, negative_prompt=None, quality: str | None = None) -> GeneratedImage:
+    def generate(self, prompt, *, size=(1024, 1024), style=None, negative_prompt=None, quality: str | None = None,
+                 transparent: bool = False) -> GeneratedImage:
         q = quality or self.quality
         api_size = pick_size(size)
         full = prompt if not style else f"{prompt}\nStyle: {style}"
         if negative_prompt:
             full += f"\nAvoid: {negative_prompt}."
-        resp = self._http.post("/images/generations", json={
-            "model": self.model, "prompt": full[:30000], "size": api_size, "quality": q, "n": 1,
-        })
+        body = {"model": self.model, "prompt": full[:30000], "size": api_size, "quality": q, "n": 1}
+        if transparent:  # artwork for printing on products
+            body.update({"background": "transparent", "output_format": "png"})
+        resp = self._http.post("/images/generations", json=body)
         if resp.status_code >= 400:
             raise RuntimeError(f"OpenAI image generation failed: {resp.status_code} {resp.text[:300]}")
         data = resp.json()["data"][0]
@@ -67,6 +69,26 @@ class OpenAIImageProvider(ImageProvider):
         log.info("image generated", model=self.model, size=api_size, quality=q, cost_usd=cost)
         return GeneratedImage(data=png, media_type="image/png", width=w, height=h, cost_usd=cost, model=self.model,
                               metadata={"prompt": prompt, "revised_prompt": data.get("revised_prompt"), "quality": q})
+
+    def edit(self, prompt, image, *, size=(1024, 1024), quality: str | None = None) -> GeneratedImage:
+        """images/edits: keeps the input (our exact product mockup) and restages it as a photo."""
+        q = quality or self.quality
+        api_size = pick_size(size)
+        data = {"model": self.model, "prompt": prompt[:30000], "size": api_size, "quality": q, "n": "1",
+                "input_fidelity": "high"}
+        files = {"image[]": ("mockup.png", image, "image/png")}
+        resp = self._http.post("/images/edits", data=data, files=files)
+        if resp.status_code == 400 and "input_fidelity" in resp.text:  # model without that option
+            data.pop("input_fidelity")
+            resp = self._http.post("/images/edits", data=data, files=files)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"OpenAI image edit failed: {resp.status_code} {resp.text[:300]}")
+        out = base64.b64decode(resp.json()["data"][0]["b64_json"])
+        w, h = (int(x) for x in api_size.split("x"))
+        cost = round(estimate_cost(self.model, q, api_size) * 1.3, 4)  # input image tokens on top
+        log.info("image edited", model=self.model, size=api_size, quality=q, cost_usd=cost)
+        return GeneratedImage(data=out, media_type="image/png", width=w, height=h, cost_usd=cost, model=self.model,
+                              metadata={"prompt": prompt, "quality": q, "edit": True})
 
     def ping(self) -> None:
         resp = self._http.get(f"/models/{self.model}")

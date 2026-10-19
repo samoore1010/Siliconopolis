@@ -23,7 +23,7 @@ def test_run_all_moves_products_to_drafted(monkeypatch):
     assert not any(st in (ProductState.CREATED, ProductState.APPROVED) for st in states), states
     with session_scope() as s:
         runs = s.execute(select(Run).order_by(Run.id)).scalars().all()
-        assert [r.agent for r in runs] == ["researcher", "creator", "qa", "lister", "analyst"]
+        assert [r.agent for r in runs] == ["researcher", "creator", "qa", "lister", "analyst", "fulfiller"]
         assert all(r.status == "success" and r.ended_at for r in runs)
         drafted = s.execute(select(Product).where(Product.state == ProductState.DRAFTED)).scalars().all()
         for p in drafted:

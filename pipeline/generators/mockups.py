@@ -249,7 +249,8 @@ def short_title(title: str, limit: int = 48) -> str:
     return cut or t[:limit]
 
 
-def included_html(title: str, items: list[str], *, palette: list[str]) -> str:
+def included_html(title: str, items: list[str], *, palette: list[str], kicker: str = "What's included",
+                  foot: str = "Instant digital download · no physical item will be shipped") -> str:
     import html as html_lib
 
     bg, ink, accent = (list(palette) + ["#F7F3EC", "#2B2B2B", "#A3B18A"])[:3]
@@ -262,5 +263,5 @@ display:flex;align-items:center;justify-content:center}}
 h1{{font-family:Poppins,Inter,sans-serif;font-size:{40 if len(title) <= 32 else 34}px;line-height:1.15;margin:14px 0 34px;overflow-wrap:break-word}}
 ul{{list-style:none;padding:0;margin:0}} li{{font-size:24px;padding:14px 0;border-top:1px solid #EEE;display:flex;gap:18px;overflow-wrap:anywhere}}
 .tick{{color:{accent};font-weight:700}} .foot{{margin-top:34px;font-size:19px;opacity:.7}}
-</style></head><body><div class='card'><div class='k'>What's included</div><h1>{html_lib.escape(title)}</h1>
-<ul>{rows}</ul><div class='foot'>Instant digital download · no physical item will be shipped</div></div></body></html>"""
+</style></head><body><div class='card'><div class='k'>{html_lib.escape(kicker)}</div><h1>{html_lib.escape(title)}</h1>
+<ul>{rows}</ul><div class='foot'>{html_lib.escape(foot)}</div></div></body></html>"""

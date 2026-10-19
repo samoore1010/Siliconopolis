@@ -20,7 +20,10 @@ Check:
    specific and useful enough for its audience, complete enough to feel like good value, and
    attractive enough in the first listing image to earn the click? Score 8+ only if you would put it
    in the shop as-is.
-8. If the owner asked for changes, confirm they were made.
+8. Printed apparel/mugs: the print must read clearly on the blank colours offered, look like a
+   professional best-selling design (not clip art), be correctly spelled, and keep personalised text
+   prominent. Mockups are exact composites; a photo mockup must show the same design faithfully.
+9. If the owner asked for changes, confirm they were made.
 
 `improvements`: the most valuable concrete changes (max 5), written as instructions to the designer.
 `verdict`: one or two plain-English sentences for the shop owner.

@@ -27,17 +27,19 @@ class AgentState:
 
 
 # schedule interval per agent (for the "sleeping" rule: > 1.5x interval without a run)
-SCHEDULE_HOURS = {"researcher": 24 * 7, "creator": 24, "qa": 24, "lister": 24, "analyst": 24 * 7}
+SCHEDULE_HOURS = {"researcher": 24 * 7, "creator": 24, "qa": 24, "lister": 24, "analyst": 24 * 7, "fulfiller": 1}
 INPUT_STATE = {"researcher": None, "creator": ProductState.BRIEF, "qa": ProductState.CREATED,
-               "lister": ProductState.APPROVED, "analyst": ProductState.DRAFTED}
+               "lister": ProductState.APPROVED, "analyst": ProductState.DRAFTED, "fulfiller": None}
 # which Railway cron service runs each agent (for the optional Run-now button)
-SERVICE_FOR_AGENT = {"researcher": "researcher", "creator": "daily", "qa": "daily", "lister": "daily", "analyst": "analyst"}
+SERVICE_FOR_AGENT = {"researcher": "researcher", "creator": "daily", "qa": "daily", "lister": "daily", "analyst": "analyst",
+                     "fulfiller": "fulfiller"}
 AGENT_META = {
     "researcher": {"title": "Researcher", "role": "finds demand, writes briefs", "schedule": "weekly, Mon 6:00 AM Phoenix"},
     "creator": {"title": "Creator", "role": "makes files + listing images", "schedule": "daily, 7:00 AM Phoenix"},
     "qa": {"title": "QA", "role": "vision check, IP + duplicate screen", "schedule": "daily, after Creator"},
     "lister": {"title": "Lister", "role": "writes copy, creates Etsy drafts", "schedule": "daily, after QA"},
     "analyst": {"title": "Analyst", "role": "reads sales, advises Researcher", "schedule": "weekly, Sun 8:00 PM Phoenix"},
+    "fulfiller": {"title": "Fulfiller", "role": "turns shirt/mug orders into print jobs", "schedule": "hourly"},
 }
 
 

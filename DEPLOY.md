@@ -10,6 +10,7 @@ One Railway project, two environments (`staging`, `production`). Each environmen
 | `researcher` | cron | `python -m pipeline run researcher` — `0 13 * * 1` (Mon 6:00 AM Phoenix) |
 | `daily-pipeline` | cron | `python -m pipeline run daily` — `0 14 * * *` (7:00 AM Phoenix) |
 | `analyst` | cron | `python -m pipeline run analyst` — `0 3 * * 1` (Sun 8:00 PM Phoenix) |
+| `fulfiller` | cron | `python -m pipeline run fulfiller` — `0 * * * *` (hourly: shirt/mug orders → print queue, tracking → Etsy) |
 
 All services build from the same `Dockerfile`; only the start command differs. Cron services run to
 completion and exit (nonzero on failure, `3` when a cap is hit) and close their DB pool on exit, as
@@ -119,6 +120,10 @@ production.
 | `IMAGE_MODEL` / `IMAGE_QUALITY` | `gpt-image-1.5` / `high` | same | wall art quality (~$0.20/image at high) |
 | `MOCKUP_SCENES` / `MOCKUP_QUALITY` | `true` / `medium` | same | backgrounds generated once per scene, then reused |
 | `VILLAGE_USER`, `VILLAGE_PASSWORD` | ✔ | ✔ | basic auth for the dashboard; without them the village returns 503 off-local |
+| `PRINT_USER`, `PRINT_PASSWORD` | ✔ | ✔ | login for the print shop's `/print` queue (sees only orders) |
+| `ETSY_SHIPPING_PROFILE_ID` | ✔ for merch | ✔ for merch | shirts/mugs are not drafted until this is set |
+| `ETSY_PRODUCTION_PARTNER_ID` | ✔ for merch | ✔ for merch | the print shop, set up in Etsy › Settings › Production partners |
+| `ETSY_READINESS_STATE_ID`, `ETSY_RETURN_POLICY_ID` | optional | optional | processing profile / return policy, if your shop requires them |
 | `RAILWAY_API_TOKEN`, `RAILWAY_SERVICE_IDS` | optional | optional | enables "Run now" buttons (Section H) |
 | `LOG_FORMAT` | `json` | `json` | Railway log explorer parses JSON lines |
 | **secrets** | | | never in the repo |
@@ -182,3 +187,23 @@ disabled until the `web` service has:
 The button only starts a normal run, so caps, locks and the draft-only rule apply exactly as on a
 schedule. The GraphQL mutation used (`serviceInstanceRedeploy`) is marked `TODO(owner)` to verify
 against Railway's current API before relying on it.
+
+
+## I. In-house shirts, sweatshirts, hoodies and mugs (family print shop)
+
+1. **Catalog.** Edit `catalog.yaml`: blanks, colours (name → hex), sizes, print area, the shop's
+   cost per item (`unit_cost`), postage estimate and price. The agents only design what is listed.
+2. **Etsy setup** (Shop Manager): add the shop as a *production partner*; create a *shipping
+   profile* (and processing profile / return policy if asked). Put their ids in
+   `ETSY_PRODUCTION_PARTNER_ID`, `ETSY_SHIPPING_PROFILE_ID` (and optional `ETSY_READINESS_STATE_ID`,
+   `ETSY_RETURN_POLICY_ID`).
+3. **OAuth scope.** Order handling needs `transactions_w` (sending tracking). If Etsy was authorized
+   before this change, re-run `/oauth/etsy/start` once.
+4. **Print shop login.** Set `PRINT_USER` / `PRINT_PASSWORD` on `web`; the shop opens
+   `https://<web-domain>/print` (works on a phone). It shows each order's proof, the 300 dpi print
+   file to download, size/colour/qty, personalisation, ship-to address, and buttons for
+   *Start printing* and *Mark shipped* (carrier + tracking). Orders with unclear personalisation are
+   flagged *Check first* and can be corrected there before printing.
+5. **Fulfiller cron.** Add the `fulfiller` service (hourly, see the table above).
+6. **Money.** The print queue shows what is owed to the shop (`unit_cost` × qty for printed orders);
+   the owner login can mark it paid.

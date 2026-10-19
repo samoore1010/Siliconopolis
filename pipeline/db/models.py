@@ -37,8 +37,11 @@ class ProductType:
     POD_STICKER = "pod_sticker"
     POD_MUG = "pod_mug"
     POD_SHIRT = "pod_shirt"
+    APPAREL = "apparel"  # in-house: shirts, sweatshirts, hoodies (catalog.yaml)
+    MUG = "mug"          # in-house: printed mugs (catalog.yaml)
     DIGITAL = (WALL_ART, PLANNER, TRACKER, SPREADSHEET)
-    ALL = DIGITAL + (POD_POSTER, POD_STICKER, POD_MUG, POD_SHIRT)
+    PHYSICAL = (APPAREL, MUG)
+    ALL = DIGITAL + PHYSICAL + (POD_POSTER, POD_STICKER, POD_MUG, POD_SHIRT)
 
 
 class Product(Base):
@@ -166,3 +169,53 @@ class OwnerNote(Base):
     # revision lifecycle: open -> addressed (Creator rebuilt it); directives: last time the Researcher used it
     status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OrderStatus:
+    NEW = "new"                    # just seen on Etsy
+    NEEDS_REVIEW = "needs_review"  # personalisation unclear/inappropriate, or the print file failed: owner decides
+    READY = "ready"                # print file ready; waiting for the shop
+    PRINTING = "printing"
+    SHIPPED = "shipped"            # shop entered tracking; sent to Etsy when etsy_synced is set
+    CANCELLED = "cancelled"
+    OPEN = (NEW, NEEDS_REVIEW, READY, PRINTING)
+    ALL = (NEW, NEEDS_REVIEW, READY, PRINTING, SHIPPED, CANCELLED)
+
+
+class FulfillmentOrder(Base):
+    """One Etsy order line for an in-house product, from purchase to tracking number."""
+
+    __tablename__ = "fulfillment_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+    etsy_receipt_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    etsy_transaction_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    product_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    item: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    title: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    size: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    color: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    personalization_raw: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    personalization: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    buyer_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    ship_to: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    print_file: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    proof_image: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=OrderStatus.NEW, index=True)
+    review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    carrier: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tracking_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    shipped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    etsy_synced: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    unit_cost: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)  # owed to the shop per item
+    paid_to_shop: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    @property
+    def owed(self) -> float:
+        return round(float(self.unit_cost or 0) * int(self.quantity or 1), 2)

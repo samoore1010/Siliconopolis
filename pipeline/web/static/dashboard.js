@@ -80,8 +80,8 @@ async function loadOverview() {
     <div class="bar"><i style="width:${pct(d.limits.ideas_this_week, d.limits.ideas_cap)}%"></i></div>
     <span>Etsy drafts today</span><span class="v">${d.limits.drafts_today} / ${d.limits.drafts_cap}</span>`;
 
-  const names = { researcher: "Researcher", creator: "Creator", qa: "QA", lister: "Lister", analyst: "Analyst" };
-  const roles = { researcher: "studies the market, proposes ideas", creator: "designs the files and images", qa: "reviews every product", lister: "writes the Etsy listing", analyst: "reads sales, guides research" };
+  const names = { researcher: "Researcher", creator: "Creator", qa: "QA", lister: "Lister", analyst: "Analyst", fulfiller: "Fulfiller" };
+  const roles = { researcher: "studies the market, proposes ideas", creator: "designs the files and images", qa: "reviews every product", lister: "writes the Etsy listing", analyst: "reads sales, guides research", fulfiller: "turns shirt/mug orders into print jobs" };
   $("#agents").innerHTML = Object.keys(names).map((k) => {
     const r = d.last_runs[k];
     const st = !r ? `<span class="hint">not run yet</span>`

@@ -230,10 +230,42 @@ class MockLLM(LLMClient):
                     ],
                 },
                 "spreadsheet_spec": _mock_sheet_spec(short.title()),
+                "merch_spec": {
+                    "item": "mug11" if product_type == "mug" else "tshirt",
+                    "colors": ["White"] if product_type == "mug" else ["Black", "Navy", "Heather Gray", "Sage"],
+                    "design_brief": "Family name in large serif, small 'EST.' year above, thin rule and motto below.",
+                    "ink_colors": ["#F4E9D8", "#E8A04C"] if product_type != "mug" else ["#2B2B2B", "#C8743A"],
+                    "illustration_prompt": None,
+                    "personalization": {"enabled": True, "instructions": "Family name, then year",
+                                        "fields": [{"key": "name", "label": "Family name", "max_chars": 14,
+                                                    "example": "Henderson"},
+                                                   {"key": "year", "label": "Year", "max_chars": 4, "example": "1987"}]},
+                },
                 "product_type": product_type,
             }
         if task == "creator_sheet_fix":
             return _mock_sheet_spec("Fixed Workbook")
+        if task in ("creator_merch_html", "creator_merch_fix"):
+            mug = "Ceramic Mug" in user
+            ink, accent = ("#2B2B2B", "#C8743A") if mug else ("#F4E9D8", "#E8A04C")
+            small, big, motto, width = (22, 84, 26, "40%") if mug else (34, 150, 44, "100%")
+            return ("```html\n<html><body><div class='design' style='display:flex;flex-direction:column;"
+                    "align-items:center;justify-content:" + ("center" if mug else "flex-start") + ";padding:.3in .3in 0;"
+                    "font-family:\"DM Serif Display\",serif;color:" + ink + "'>"
+                    f"<div style='font-family:Poppins,sans-serif;letter-spacing:.3em;font-size:{small}px;color:" + accent + "'>"
+                    f"EST. {{{{year}}}}</div><div data-fit style='width:{width};text-align:center;font-size:{big}px;line-height:1.05'>"
+                    "{{name}}</div><div style='width:30%;height:4px;background:" + accent + ";margin:12px 0'></div>"
+                    f"<div style='font-family:Poppins,sans-serif;font-size:{motto}px;letter-spacing:.18em'>FAMILY REUNION</div>"
+                    "</div></body></html>\n```")
+        if task == "order_check":
+            from pipeline.fulfillment import simple_parse
+
+            fields = json.loads(_grab(user, r"Fields: (\[.*\])") or "[]")
+            text = json.loads(_grab(user, r"Buyer's personalisation text: (\".*\")") or '""')
+            values = simple_parse(text, fields)
+            concerns = [f"{f.get('label')} is longer than {f.get('max_chars')} characters" for f in fields
+                        if len(values.get(f["key"], "")) > int(f.get("max_chars") or 99)]
+            return {"ok": not concerns, "values": values, "concerns": concerns}
         if task in ("creator_page_html", "creator_page_fix"):
             return ("```html\n<html><head><style>.page{padding:.6in;background:#F7F3EC;display:flex;flex-direction:column;gap:.3in}"
                     "h1{font-family:Poppins,sans-serif;margin:0}.box{flex:1;border:3px solid #A3B18A;border-radius:18px}"
