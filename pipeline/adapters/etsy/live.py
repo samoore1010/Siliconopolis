@@ -63,7 +63,7 @@ class EtsyAPIError(RuntimeError):
 class LiveEtsyClient(EtsyClient):
     name = "live"
 
-    def __init__(self, *, api_key: str, shop_id: str, dry_run: bool, rate_limit_per_sec: float = 8.0,
+    def __init__(self, *, api_key: str, shop_id: str, dry_run: bool, rate_limit_per_sec: float = 4.0,
                  seed_access: str = "", seed_refresh: str = ""):
         if not api_key:
             raise RuntimeError("ETSY_API_KEY is required for live mode")
@@ -199,6 +199,14 @@ class LiveEtsyClient(EtsyClient):
         # TODO(owner): v3 updateListing uses PATCH; confirm content-type (form-encoded) and fields.
         data = self._request("PATCH", f"/shops/{self.shop_id}/listings/{listing_id}", write=True, data=payload)
         return DraftListing(listing_id=str(listing_id), state=data.get("state", "draft"), title=data.get("title", ""), raw=data)
+
+    def is_connected(self) -> bool:
+        if not (self.api_key and self.shop_id):
+            return False
+        try:
+            return token_store.load_tokens() is not None
+        except Exception:  # noqa: BLE001 - treat DB problems as "not connected" for gating
+            return False
 
     def ping(self) -> None:
         # /openapi-ping needs only the API key

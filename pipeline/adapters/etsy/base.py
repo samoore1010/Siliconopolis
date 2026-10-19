@@ -89,6 +89,14 @@ class EtsyClient(ABC):
     @abstractmethod
     def ping(self) -> None: ...
 
+    def is_connected(self) -> bool:
+        """True when the shop is authorized for shop-level calls (drafts, receipts, stats).
+
+        Mock is always connected. Live is connected once OAuth tokens are stored, so the pipeline can
+        run research/creation before Etsy approves the app and start drafting as soon as it does.
+        """
+        return True
+
     def flatten_taxonomy(self) -> list[TaxonomyNode]:
         out: list[TaxonomyNode] = []
 

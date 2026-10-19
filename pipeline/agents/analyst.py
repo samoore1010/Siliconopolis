@@ -33,12 +33,15 @@ class AnalystAgent(Agent):
         listing_ids = [p.etsy_listing_id for p in drafted if p.etsy_listing_id]
 
         stats, receipts = [], []
-        try:
-            stats = etsy.get_listing_stats(listing_ids[:100]) if listing_ids else []
-            since = int((datetime.now(UTC) - timedelta(days=30)).timestamp())
-            receipts = etsy.get_shop_receipts(min_created=since)
-        except Exception as e:  # noqa: BLE001
-            self.note_error(f"analyst: etsy read failed: {e}")
+        if not etsy.is_connected():
+            self.log.warning("Etsy not connected yet; skipping listing stats and receipts this run")
+        else:
+            try:
+                stats = etsy.get_listing_stats(listing_ids[:100]) if listing_ids else []
+                since = int((datetime.now(UTC) - timedelta(days=30)).timestamp())
+                receipts = etsy.get_shop_receipts(min_created=since)
+            except Exception as e:  # noqa: BLE001
+                self.note_error(f"analyst: etsy read failed: {e}")
 
         # Detect listings the owner published (human step) and mirror state
         by_listing = {p.etsy_listing_id: p for p in drafted}

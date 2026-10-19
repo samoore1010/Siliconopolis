@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     etsy_redirect_uri: str = Field(
         "http://localhost:8000/oauth/etsy/callback", alias="ETSY_REDIRECT_URI"
     )
-    etsy_rate_limit_per_sec: float = Field(8.0, alias="ETSY_RATE_LIMIT_PER_SEC")
+    etsy_rate_limit_per_sec: float = Field(4.0, alias="ETSY_RATE_LIMIT_PER_SEC")
 
     # printify
     printify_mode: Literal["", "mock", "live"] = Field("", alias="PRINTIFY_MODE")
