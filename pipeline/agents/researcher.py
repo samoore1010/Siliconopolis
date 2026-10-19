@@ -84,7 +84,8 @@ class ResearcherAgent(Agent):
                 f"Produce exactly {n} original product briefs. Allowed product_type values: "
                 f"{', '.join(niche.get('product_types') or list(ProductType.DIGITAL))}."
             )
-            result = self.ask(session, task="research_briefs", model=self.settings.model_research, user=user)
+            result = self.ask(session, task="research_briefs", model=self.settings.model_research, user=user,
+                              max_tokens=16000)
             try:
                 briefs = result.json().get("briefs", [])
             except Exception as e:  # noqa: BLE001

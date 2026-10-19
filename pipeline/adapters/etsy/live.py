@@ -1,7 +1,7 @@
 """Live Etsy Open API v3 client.
 
 Base URL: https://openapi.etsy.com/v3/application
-Auth: `x-api-key: <ETSY_API_KEY>` on every call; `Authorization: Bearer <access_token>` on shop calls.
+Auth: `x-api-key: <ETSY_API_KEY>:<ETSY_SHARED_SECRET>` on every call (Etsy requires both); `Authorization: Bearer <access_token>` on shop calls.
 Tokens live in the oauth_tokens table and are refreshed automatically (Etsy rotates refresh tokens).
 
 TODO(owner): before go-live, verify every endpoint, field name and allowed value against the
@@ -64,10 +64,11 @@ class LiveEtsyClient(EtsyClient):
     name = "live"
 
     def __init__(self, *, api_key: str, shop_id: str, dry_run: bool, rate_limit_per_sec: float = 4.0,
-                 seed_access: str = "", seed_refresh: str = ""):
+                 seed_access: str = "", seed_refresh: str = "", shared_secret: str = ""):
         if not api_key:
             raise RuntimeError("ETSY_API_KEY is required for live mode")
-        self.api_key = api_key
+        self.api_key = api_key  # keystring; also the OAuth client_id
+        self.shared_secret = shared_secret
         self.shop_id = shop_id
         self.dry_run = dry_run
         self.throttle = Throttle(rate_limit_per_sec)
@@ -76,7 +77,7 @@ class LiveEtsyClient(EtsyClient):
 
     @classmethod
     def from_settings(cls, s: Settings) -> LiveEtsyClient:
-        return cls(api_key=s.etsy_api_key, shop_id=s.etsy_shop_id, dry_run=s.dry_run,
+        return cls(api_key=s.etsy_api_key, shared_secret=s.etsy_shared_secret, shop_id=s.etsy_shop_id, dry_run=s.dry_run,
                    rate_limit_per_sec=s.etsy_rate_limit_per_sec,
                    seed_access=s.etsy_oauth_access_token, seed_refresh=s.etsy_oauth_refresh_token)
 
@@ -102,7 +103,7 @@ class LiveEtsyClient(EtsyClient):
         if write and self.dry_run:
             log.info("DRY_RUN: skipping Etsy write", method=method, path=path)
             return {"dry_run": True}
-        headers = {"x-api-key": self.api_key}
+        headers = {"x-api-key": self.api_key_header}
         if auth:
             headers["Authorization"] = f"Bearer {self._access_token()}"
         backoff = 1.0
@@ -199,6 +200,11 @@ class LiveEtsyClient(EtsyClient):
         # TODO(owner): v3 updateListing uses PATCH; confirm content-type (form-encoded) and fields.
         data = self._request("PATCH", f"/shops/{self.shop_id}/listings/{listing_id}", write=True, data=payload)
         return DraftListing(listing_id=str(listing_id), state=data.get("state", "draft"), title=data.get("title", ""), raw=data)
+
+    @property
+    def api_key_header(self) -> str:
+        # Etsy Open API v3: "x-api-key: <keystring>:<shared_secret>"
+        return f"{self.api_key}:{self.shared_secret}" if self.shared_secret else self.api_key
 
     def is_connected(self) -> bool:
         if not (self.api_key and self.shop_id):
