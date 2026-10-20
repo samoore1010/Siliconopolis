@@ -144,6 +144,20 @@ class JobRequest(Base):
     note: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
 
+class CapReset(Base):
+    """The owner reset a limit by hand: counting for that cap starts again from `reset_at`."""
+
+    __tablename__ = "cap_resets"
+    SPEND = "spend"   # MAX_DAILY_SPEND_USD (today's AI spend)
+    IDEAS = "ideas"   # WEEKLY_BRIEF_CAP (ideas this week)
+    ALL = (SPEND, IDEAS)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cap: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    reset_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
 class OAuthToken(Base):
     """Persisted OAuth tokens. Etsy rotates the refresh token on every refresh, so env vars only seed this."""
 

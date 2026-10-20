@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from pipeline.db.models import Product, ProductState, Run
+from pipeline.db.models import CapReset, Product, ProductState, Run
 
 
 class CapReached(RuntimeError):
@@ -21,8 +21,20 @@ def _utc_day_start(now: datetime | None = None) -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def last_reset(session: Session, cap: str) -> datetime | None:
+    """When the owner last reset this cap by hand (None if never)."""
+    at = session.execute(select(func.max(CapReset.reset_at)).where(CapReset.cap == cap)).scalar()
+    return at if at is None or at.tzinfo else at.replace(tzinfo=UTC)
+
+
+def _since(session: Session, cap: str, window_start: datetime) -> datetime:
+    """Counting starts at the window (day/week) or at the owner's last reset, whichever is later."""
+    reset = last_reset(session, cap)
+    return max(window_start, reset) if reset else window_start
+
+
 def todays_spend(session: Session, exclude_run_id: int | None = None) -> float:
-    q = select(func.coalesce(func.sum(Run.cost_usd), 0.0)).where(Run.started_at >= _utc_day_start())
+    q = select(func.coalesce(func.sum(Run.cost_usd), 0.0)).where(Run.started_at >= _since(session, CapReset.SPEND, _utc_day_start()))
     if exclude_run_id is not None:
         q = q.where(Run.id != exclude_run_id)
     return float(session.execute(q).scalar_one())
@@ -43,7 +55,7 @@ def drafts_today(session: Session) -> int:
 
 
 def briefs_this_week(session: Session) -> int:
-    since = datetime.now(UTC) - timedelta(days=7)
+    since = _since(session, CapReset.IDEAS, datetime.now(UTC) - timedelta(days=7))
     q = select(func.count(Product.id)).where(Product.created_at >= since)
     return int(session.execute(q).scalar_one())
 

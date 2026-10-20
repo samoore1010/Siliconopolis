@@ -45,7 +45,8 @@ village UI addendum [`village-addendum.md`](village-addendum.md). Deployment: [`
 ## The app and the village
 
 `/dashboard` (the root URL redirects there) is the owner's app: Home (what needs you, the live
-office, schedule, spend), Products (every product with images, files, why it was chosen, the
+office, schedule, spend and limits with manual resets), Spend (all-time AI spend by agent, month, day and
+product, with token/image usage), Products (every product with images, files, why it was chosen, the
 market analysis, QA's verdict, your feedback; the Creator's build queue and the Editor's polish
 queue, both reorderable with Stop), Research (brief the next run), Orders, Team.
 

@@ -27,6 +27,7 @@ from pipeline.db.events import EventKind, record_event
 from pipeline.db.locking import QUEUE_ORDER, transition
 from pipeline.db.models import (
     BriefStatus,
+    CapReset,
     Event,
     FulfillmentOrder,
     JobRequest,
@@ -43,7 +44,7 @@ from pipeline.db.models import (
     utcnow,
 )
 from pipeline.generators.mockups import short_title
-from pipeline.guardrails.caps import briefs_this_week, drafts_today, todays_spend
+from pipeline.guardrails.caps import briefs_this_week, drafts_today, last_reset, todays_spend
 from pipeline.schedule import next_run
 from pipeline.storage import get_storage
 from pipeline.web.auth import require_viewer, require_write
@@ -278,6 +279,7 @@ def overview():
                                   .where(ResearchRequest.status == BriefStatus.QUEUED)).scalar_one()
         spent_today = todays_spend(s)
         drafted_today = drafts_today(s)
+        resets = {cap: (_aware(at).isoformat() if (at := last_reset(s, cap)) else None) for cap in CapReset.ALL}
 
         etsy_live = settings.adapter_mode("etsy") == "live"
         etsy_connected = True
@@ -362,7 +364,8 @@ def overview():
         "spend": {"today": round(spent_today, 2), "week": round(spend_week, 2), "total": round(spend_total, 2),
                   "daily_limit": settings.max_daily_spend_usd},
         "limits": {"ideas_this_week": briefs_week, "ideas_cap": settings.weekly_brief_cap,
-                   "drafts_today": drafted_today, "drafts_cap": settings.daily_draft_cap},
+                   "drafts_today": drafted_today, "drafts_cap": settings.daily_draft_cap,
+                   "spend_reset_at": resets[CapReset.SPEND], "ideas_reset_at": resets[CapReset.IDEAS]},
         "settings": {"app_env": settings.app_env, "etsy": "connected" if etsy_connected and etsy_live
                      else ("waiting for approval" if etsy_live else "mock"),
                      "images": settings.image_provider, "dry_run": settings.dry_run},
@@ -703,6 +706,77 @@ def add_comment(product_id: int, body: CommentIn):
             record_event(s, kind=EventKind.INFO, agent="owner", product_id=p.id, message=f"Owner commented: {text[:160]}")
         s.flush()
         return {"comment": _note(note), "state": p.state}
+
+
+# ---------------------------------------------------------------------------------------------- limits & spend
+CAP_LABEL = {CapReset.SPEND: "today's AI spend limit", CapReset.IDEAS: "this week's ideas limit"}
+
+
+@router.post("/limits/{cap}/reset", dependencies=[Depends(require_write)])
+def reset_limit(cap: str):
+    """Start counting a limit again from now (the limit itself stays as configured). Spend already
+    made is still recorded and shown on the Spend page; it just no longer counts against today's cap."""
+    if cap not in CapReset.ALL:
+        raise HTTPException(404, "Unknown limit. Use 'spend' or 'ideas'.")
+    with session_scope() as s:
+        s.add(CapReset(cap=cap, note="dashboard"))
+        record_event(s, kind=EventKind.INFO, agent="owner", message=f"You reset {CAP_LABEL[cap]}")
+        s.flush()
+        return {"cap": cap, "spend_today": round(todays_spend(s), 2), "ideas_this_week": briefs_this_week(s)}
+
+
+@router.get("/spend")
+def spend():
+    """All-time AI spend: totals, by agent, by month, by product, with token/image usage."""
+    now = datetime.now(UTC)
+    with session_scope() as s:
+        runs = s.execute(select(Run).order_by(Run.started_at.asc())).scalars().all()
+
+        def total(since: datetime | None) -> float:
+            return round(sum(r.cost_usd or 0 for r in runs if since is None or _aware(r.started_at) >= since), 2)
+
+        by_agent: dict[str, dict[str, Any]] = {}
+        by_month: dict[str, dict[str, Any]] = {}
+        usage = {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0, "images": 0}
+        for r in runs:
+            a = by_agent.setdefault(r.agent, {"agent": r.agent, "label": AGENT_LABEL.get(r.agent, r.agent), "cost": 0.0,
+                                               "runs": 0, "items": 0, "images": 0, "llm_calls": 0})
+            a["cost"] += r.cost_usd or 0
+            a["runs"] += 1
+            a["items"] += r.items_processed or 0
+            u = r.usage_json or {}
+            a["images"] += int(u.get("images") or 0)
+            a["llm_calls"] += int(u.get("llm_calls") or 0)
+            for k in usage:
+                usage[k] += int(u.get(k) or 0)
+            key = _aware(r.started_at).strftime("%Y-%m")
+            m = by_month.setdefault(key, {"month": key, "cost": 0.0, "runs": 0, "items": 0})
+            m["cost"] += r.cost_usd or 0
+            m["runs"] += 1
+            m["items"] += r.items_processed or 0
+        days: dict[str, float] = {}
+        for r in runs:
+            if _aware(r.started_at) >= now - timedelta(days=30):
+                d = _aware(r.started_at).strftime("%Y-%m-%d")
+                days[d] = days.get(d, 0.0) + (r.cost_usd or 0)
+        products = s.execute(select(Product).where(Product.cost_usd > 0).order_by(Product.cost_usd.desc()).limit(15)).scalars().all()
+        n_products = s.execute(select(func.count(Product.id))).scalar_one()
+        n_drafted = s.execute(select(func.count(Product.id)).where(Product.state.in_(ProductState.ON_ETSY))).scalar_one()
+        all_time = total(None)
+        return {
+            "totals": {"today": round(todays_spend(s), 2), "last_7_days": total(now - timedelta(days=7)),
+                       "last_30_days": total(now - timedelta(days=30)), "all_time": all_time,
+                       "per_product": round(all_time / n_products, 2) if n_products else None,
+                       "per_etsy_listing": round(all_time / n_drafted, 2) if n_drafted else None,
+                       "products": n_products, "etsy_listings": n_drafted},
+            "usage": usage,
+            "by_agent": sorted(({**a, "cost": round(a["cost"], 2)} for a in by_agent.values()), key=lambda a: -a["cost"]),
+            "by_month": [{**m, "cost": round(m["cost"], 2)} for m in sorted(by_month.values(), key=lambda m: m["month"], reverse=True)][:12],
+            "by_day": [{"day": d, "cost": round(c, 2)} for d, c in sorted(days.items())],
+            "top_products": [{**_card(p), "cost_usd": round(p.cost_usd or 0, 2)} for p in products],
+            "limits": {"daily_limit": get_settings().max_daily_spend_usd,
+                       "spend_reset_at": (_aware(at).isoformat() if (at := last_reset(s, CapReset.SPEND)) else None)},
+        }
 
 
 # ---------------------------------------------------------------------------------------------- send to the Editor

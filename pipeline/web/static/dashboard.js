@@ -220,7 +220,7 @@ async function refreshOverview() {
 }
 
 /* ---------------------------------------------------------------- router */
-const pages = { home: renderHome, products: renderProducts, research: renderResearch, orders: renderOrders, team: renderTeam };
+const pages = { home: renderHome, products: renderProducts, research: renderResearch, orders: renderOrders, team: renderTeam, spend: renderSpend };
 let current = null;
 async function route() {
   const [page, arg] = (location.hash.slice(1) || "home").split("/");
@@ -310,11 +310,22 @@ function fillHome(o) {
     + (o.briefs_queued ? `<li><span><a href="#research">${plural(o.briefs_queued, "brief")} waiting</a></span><time>for the research run</time></li>` : "");
   $("#feed").innerHTML = activityHTML(o.activity, 7);
   const pct = (a, b) => Math.min(100, b ? (a / b) * 100 : 0);
+  const resetNote = (iso) => (iso ? `<span class="muted small">reset ${esc(ago(iso))}</span>` : "");
   $("#limits").innerHTML = `
-    <div class="meter"><span>AI spend today</span><b>${money(o.spend.today)} / ${money(o.spend.daily_limit)}</b><div class="track"><i style="width:${pct(o.spend.today, o.spend.daily_limit)}%"></i></div></div>
-    <div class="meter"><span>Ideas this week</span><b>${o.limits.ideas_this_week} / ${o.limits.ideas_cap}</b><div class="track"><i style="width:${pct(o.limits.ideas_this_week, o.limits.ideas_cap)}%"></i></div></div>
+    <div class="meter"><span>AI spend today <button class="link small" data-reset="spend" title="Start counting today's spend from now; the limit itself stays the same">reset</button> ${resetNote(o.limits.spend_reset_at)}</span><b>${money(o.spend.today)} / ${money(o.spend.daily_limit)}</b><div class="track"><i style="width:${pct(o.spend.today, o.spend.daily_limit)}%"></i></div></div>
+    <div class="meter"><span>Ideas this week <button class="link small" data-reset="ideas" title="Start counting this week's ideas from now; the limit itself stays the same">reset</button> ${resetNote(o.limits.ideas_reset_at)}</span><b>${o.limits.ideas_this_week} / ${o.limits.ideas_cap}</b><div class="track"><i style="width:${pct(o.limits.ideas_this_week, o.limits.ideas_cap)}%"></i></div></div>
     <div class="meter"><span>Etsy drafts today</span><b>${o.limits.drafts_today} / ${o.limits.drafts_cap}</b><div class="track"><i style="width:${pct(o.limits.drafts_today, o.limits.drafts_cap)}%"></i></div></div>
-    <div class="muted small">Last 7 days ${money(o.spend.week)} · all time ${money(o.spend.total)}</div>`;
+    <div class="muted small">Last 7 days ${money(o.spend.week)} · all time ${money(o.spend.total)} · <a href="#spend">all spend →</a></div>`;
+  $$("#limits [data-reset]").forEach((b) => (b.onclick = async () => {
+    const cap = b.dataset.reset;
+    const what = cap === "spend" ? `today's AI spend limit (${money(o.spend.daily_limit)})` : `this week's ideas limit (${o.limits.ideas_cap})`;
+    const ok = await confirmBox({ title: `Reset ${what}?`, ok: "Reset",
+      body: cap === "spend" ? "Counting starts again from now, so the agents can keep working today. What was spent is still recorded on the Spend page; this does not change the limit itself."
+        : "Counting starts again from now, so the Researcher can propose more ideas this week. This does not change the limit itself." });
+    if (!ok) return;
+    try { await send("POST", `/api/dashboard/limits/${cap}/reset`); toast("Reset. Counting starts from now."); fillHome(await refreshOverview()); }
+    catch (e) { toast(e.message, true); }
+  }));
 }
 
 /* ================================================================ PRODUCTS */
@@ -785,6 +796,39 @@ async function renderOrders(view) {
       } catch (e) { toast(e.message, true); }
     };
   }));
+}
+
+/* ================================================================ SPEND */
+async function renderSpend(view) {
+  const d = await api("/api/dashboard/spend");
+  const t = d.totals, u = d.usage;
+  const maxDay = Math.max(0.01, ...d.by_day.map((x) => x.cost));
+  const maxAgent = Math.max(0.01, ...d.by_agent.map((x) => x.cost));
+  const n = (v) => Number(v || 0).toLocaleString();
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Spend</h1><p>Every dollar the agents have spent on AI (Claude and image generation), all time. Etsy fees and the print shop are not included.</p></div></div>
+    <div class="flow" style="margin-bottom:18px">
+      ${[["Today", t.today], ["Last 7 days", t.last_7_days], ["Last 30 days", t.last_30_days], ["All time", t.all_time]].map(([l, v]) => `<button disabled><span class="n">${money(v)}</span><span class="l">${l}</span></button>`).join("")}
+      <button disabled><span class="n">${t.per_etsy_listing != null ? money(t.per_etsy_listing) : "—"}</span><span class="l">per Etsy listing (${t.etsy_listings})</span></button></div>
+    <div class="home">
+      <div>
+        <div class="panel pad"><h2>By agent, all time</h2><table class="spend-table">
+          ${d.by_agent.map((a) => `<tr><td>${esc(a.label)}</td><td class="bar"><i style="width:${(a.cost / maxAgent) * 100}%"></i></td><td class="num"><b>${money(a.cost)}</b></td><td class="muted small">${plural(a.runs, "run")} · ${plural(a.items, "item")}${a.images ? ` · ${plural(a.images, "image")}` : ""}</td></tr>`).join("") || `<tr><td class="muted">Nothing spent yet.</td></tr>`}</table></div>
+        <div class="section-title"><h2>Last 30 days, by day</h2></div>
+        <div class="panel pad"><div class="days">${d.by_day.map((x) => `<div title="${esc(x.day)}: ${money(x.cost)}"><i style="height:${Math.max(2, (x.cost / maxDay) * 100)}%"></i></div>`).join("") || `<span class="muted">No runs in the last 30 days.</span>`}</div>
+          <div class="muted small" style="margin-top:6px">Daily limit ${money(d.limits.daily_limit)}${d.limits.spend_reset_at ? ` · last reset ${esc(ago(d.limits.spend_reset_at))}` : ""}</div></div>
+        <div class="section-title"><h2>Most expensive products</h2></div>
+        <div class="panel pad"><table class="spend-table">${d.top_products.map((p) => `<tr><td><a href="#product/${p.id}">${esc(p.title)}</a> <span class="muted small">${esc(p.type_label)} · ${esc(p.stage)}</span></td><td class="num"><b>${money(p.cost_usd)}</b></td></tr>`).join("") || `<tr><td class="muted">No products yet.</td></tr>`}</table>
+          <p class="muted small" style="margin:8px 0 0">A product's cost adds up over every build, polish and review. Average per product so far: ${t.per_product != null ? money(t.per_product) : "—"} (${t.products} products).</p></div>
+      </div>
+      <div class="side">
+        <div class="panel pad"><h2>By month</h2><ul class="sched">${d.by_month.map((m) => `<li><span>${esc(m.month)} <span class="muted small">· ${plural(m.runs, "run")}</span></span><time>${money(m.cost)}</time></li>`).join("") || `<li class="muted">—</li>`}</ul></div>
+        <div class="panel pad"><h2>Usage, all time</h2><ul class="sched">
+          <li><span>Claude calls</span><time>${n(u.llm_calls)}</time></li><li><span>Input tokens</span><time>${n(u.input_tokens)}</time></li>
+          <li><span>Output tokens</span><time>${n(u.output_tokens)}</time></li><li><span>Images generated</span><time>${n(u.images)}</time></li></ul>
+          <p class="muted small" style="margin:8px 0 0">Costs are estimated from token counts and the pricing table (LLM_PRICING) and image prices; check your Anthropic and OpenAI bills for the exact figures.</p></div>
+      </div>
+    </div>`;
 }
 
 /* ================================================================ TEAM */
