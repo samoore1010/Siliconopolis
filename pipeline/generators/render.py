@@ -57,10 +57,18 @@ class LayoutReport:
         return self.pages > 0 and not self.problems
 
 
+_FENCE_LINE_RE = re.compile(r"^\s*```[a-zA-Z]*\s*$", re.MULTILINE)
+
+
 def extract_html(text: str) -> str:
-    """Pull an HTML document out of a model reply (handles ```html fences)."""
+    """Pull an HTML document out of a model reply: a complete ```html fence, else the document itself
+    with any stray fence markers removed (an unterminated fence used to end up printed on the page)."""
     m = _HTML_FENCE_RE.search(text)
     html = (m.group(1) if m else text).strip()
+    html = _FENCE_LINE_RE.sub("", html).strip()
+    if m is None:  # prose before the document: start at the first tag
+        start = min((i for i in (html.find("<!doctype"), html.find("<!DOCTYPE"), html.find("<html"), html.find("<div")) if i != -1), default=0)
+        html = html[start:]
     if "<" not in html:
         raise RenderError("model reply did not contain HTML")
     return html
