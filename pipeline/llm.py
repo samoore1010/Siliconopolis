@@ -50,22 +50,38 @@ class LLMResult:
             raise
 
 
+_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+
+
+def _loads(candidate: str) -> Any:
+    """json.loads with the slips models make: raw newlines/tabs inside strings, trailing commas."""
+    for attempt in (candidate, _TRAILING_COMMA_RE.sub(r"\1", candidate)):
+        try:
+            return json.loads(attempt, strict=False)
+        except json.JSONDecodeError:
+            continue
+    raise json.JSONDecodeError("unparseable", candidate, 0)
+
+
 def extract_json(text: str) -> Any:
-    """Pull the first JSON object/array out of a model reply (handles ```json fences)."""
+    """Pull the first JSON object/array out of a model reply: ```json fences, prose before/after,
+    control characters inside strings and trailing commas are all tolerated."""
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
-    candidate = fenced.group(1) if fenced else text
-    candidate = candidate.strip()
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError:
-        pass
-    for opener, closer in (("{", "}"), ("[", "]")):
-        start, end = candidate.find(opener), candidate.rfind(closer)
-        if start != -1 and end > start:
-            try:
-                return json.loads(candidate[start : end + 1])
-            except json.JSONDecodeError:
-                continue
+    candidates = [fenced.group(1).strip()] if fenced else []
+    candidates.append(text.strip())
+    for candidate in candidates:
+        try:
+            return _loads(candidate)
+        except json.JSONDecodeError:
+            pass
+        for opener, closer in (("{", "}"), ("[", "]")):
+            start, end = candidate.find(opener), candidate.rfind(closer)
+            if start != -1 and end > start:
+                try:
+                    return _loads(candidate[start : end + 1])
+                except json.JSONDecodeError:
+                    continue
+    log.warning("model reply was not valid JSON", reply=text[:3000])
     raise LLMError(f"model reply did not contain valid JSON: {text[:200]!r}")
 
 
@@ -296,8 +312,9 @@ class MockLLM(LLMClient):
                            "design_polish": 8, "commercial_viability": 8},
                 "verdict": "Mock QA: would hold its own against typical listings at this price.",
                 "improvements": [],
-                "requested_changes": [{"change": c.strip()[:120], "done": True}
-                                      for c in re.findall(r"^- (.+)$", user.split("REQUESTED CHANGES", 1)[1], re.M)]
+                "requested_changes": [{"change": c.strip()[:120], "done": True} for c in re.findall(
+                    r"^- (.+)$", re.split(r"\n(?:The Editor declared|Previous version)", user.split("REQUESTED CHANGES", 1)[1])[0], re.M)
+                    if not c.startswith("(none")]
                 if "REQUESTED CHANGES" in user else [],
                 "ip_concerns": [],
                 "reasons": ["Mock QA: placeholder images render, no text artifacts, matches brief."],

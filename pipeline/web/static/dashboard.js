@@ -111,6 +111,30 @@ function activityHTML(list, limit) {
   }).join("") || `<li><span class="muted">Nothing yet.</span></li>`;
 }
 const thumb = (p) => (p.thumb ? `background-image:url('${esc(p.thumb)}')` : "");
+const ROUND_KIND = { build: "built", rebuild: "rebuilt", polish: "polished" };
+function roundLine(p) {
+  const r = p.round;
+  if (!r || (r.n === 1 && !r.last_qa)) return "";
+  const q = r.last_qa;
+  const verdict = q ? (q.pass ? `<span class="ok">QA approved</span>` : `<span class="bad">QA rejected</span>${q.total ? ` · ${q.done} of ${q.total} requested changes made` : ""}`) : "waiting for QA";
+  const who = r.pending ? `round ${r.n} ${r.kind === "polish" ? "with the Editor" : "with the Creator"}` : `round ${r.n}, ${ROUND_KIND[r.kind] || r.kind}`;
+  return `<div class="round">${who} · ${verdict}${r.rounds_rejected > 1 ? ` · rejected ${r.rounds_rejected}×` : ""}</div>`;
+}
+function roundsBlock(p) {
+  const rounds = p.rounds || [];
+  if (!rounds.length) return "";
+  const tick = (c) => `<li class="${c.done ? "done" : "notdone"}"><span>${c.done ? "✓" : "✗"}</span><span>${esc(c.change)}${c.note ? ` <i class="muted">(${esc(c.note)})</i>` : ""}</span></li>`;
+  return `<div class="sec"><h2>Versions</h2><p class="muted small">Each time it was built, rebuilt or polished, and what QA found.</p>
+    ${[...rounds].reverse().map((r) => `<details class="round-card" ${r === rounds[rounds.length - 1] ? "open" : ""}>
+      <summary><b>Round ${r.round}</b> · ${esc(ROUND_KIND[r.kind] || r.kind)} by the ${esc(r.by)} · ${r.pass ? `<span class="st done">approved</span>` : `<span class="st failed">rejected</span>`}${r.total ? ` · ${r.done}/${r.total} requested changes made` : ""} <time class="muted small">${esc(ago(r.at))}</time></summary>
+      ${r.checks.length ? `<div class="lbl">Requested changes</div><ul class="checks">${r.checks.map(tick).join("")}</ul>`
+        : r.asked.length ? `<div class="lbl">Asked for</div><ul>${r.asked.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
+      ${Object.keys(r.scores).length ? `<div class="lbl">Scores</div><p class="small">${Object.entries(r.scores).map(([k, v]) => `${esc(SCORE_LABEL[k] || k)} <b>${esc(v)}</b>`).join(" · ")}</p>` : ""}
+      ${r.reasons.length ? `<div class="lbl">QA said</div><ul class="small">${r.reasons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      ${r.improvements.length ? `<div class="lbl">To fix next (goes to the Editor)</div><ul class="small">${r.improvements.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      ${r.listing_notes.length ? `<div class="lbl">About the listing images (not the designer's job)</div><ul class="small muted">${r.listing_notes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+    </details>`).join("")}</div>`;
+}
 
 /* ---------------------------------------------------------------- run now, stop & working */
 async function runNow(agent, label, after) {
@@ -320,6 +344,7 @@ function drawProducts() {
         <div class="meta"><span class="st ${esc(p.state)}">${esc(p.stage)}</span><span>${esc(p.type_label)}</span>${p.price ? `<span>· ${money(p.price)}</span>` : ""}</div>
         <div class="t">${esc(p.title)}</div>
         <div class="o">${esc(p.one_liner)}</div>
+        ${roundLine(p)}
         ${p.revision_pending ? `<div class="why-rev">Your changes are being made</div>` : ""}
         ${p.edit_pending ? `<div class="why-rev">Waiting for the Editor's polish</div>` : ""}
         ${p.edit_failed ? `<div class="why-bad">The Editor couldn't polish this; open it to see why</div>` : ""}
@@ -477,6 +502,7 @@ function editsBlock(p) {
         ${e.note ? `<div class="lbl">Your note</div><p>${esc(e.note)}</p>` : ""}
         ${e.improvements.length ? `<div class="lbl">QA's suggestions</div><ul>${e.improvements.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : ""}
         ${e.changes_made.length ? `<div class="lbl">What the Editor changed</div><ul>${e.changes_made.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : ""}
+        ${(e.skipped || []).length ? `<div class="lbl">Couldn't do</div><ul class="small">${e.skipped.map((s) => `<li>${esc(s.change)} <i class="muted">${esc(s.why)}</i></li>`).join("")}</ul>` : ""}
         ${e.kept.length ? `<div class="lbl">Kept</div><p class="small muted">${esc(e.kept.join(" · "))}</p>` : ""}
         ${p.qa?.scores && Object.keys(e.previous_scores).length && !e.failed ? `<div class="lbl">Scores before → after</div><p class="small">${scoreDiff(e.previous_scores, p.qa.scores) || "no change yet (waiting for QA)"}</p>` : ""}
         ${e.before.length ? `<div class="lbl">Before</div><div class="thumbs before">${e.before.slice(0, 4).map((u, i) => `<a href="${esc(u)}?w=1200" target="_blank" rel="noopener" style="background-image:url('${esc(u)}')" aria-label="Before, image ${i + 1}"></a>`).join("")}</div>` : ""}
@@ -515,10 +541,13 @@ async function openProduct(id) {
         <div class="verdict ${qa.passed ? "ok" : "no"}">${qa.passed ? "Approved for Etsy" : "Rejected: not good enough to list yet"}</div>
         ${qa.verdict ? `<p><i>${esc(qa.verdict)}</i></p>` : ""}
         ${Object.entries(qa.scores || {}).map(([k, v]) => `<div class="score ${COMMERCIAL.includes(k) ? "biz" : ""}"><span>${esc(SCORE_LABEL[k] || k)}</span><span class="track"><i style="width:${v * 10}%;background:${COMMERCIAL.includes(k) ? (v >= 8 ? "var(--good)" : "var(--bad)") : scoreColor(v)}"></i></span><b>${esc(v)}</b></div>`).join("")}
-        ${qa.improvements?.length ? `<div class="lbl">How to make it better</div><ul>${qa.improvements.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+        ${qa.requested_changes?.length ? `<div class="lbl">Requested changes</div><ul class="checks">${qa.requested_changes.map((c) => `<li class="${c.done ? "done" : "notdone"}"><span>${c.done ? "✓" : "✗"}</span><span>${esc(c.change)}${c.note ? ` <i class="muted">(${esc(c.note)})</i>` : ""}</span></li>`).join("")}</ul>` : ""}
+        ${qa.improvements?.length ? `<div class="lbl">How to make it better (what the Editor will be asked)</div><ul>${qa.improvements.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+        ${qa.listing_notes?.length ? `<div class="lbl">About the listing images</div><p class="small muted">These are generated automatically from the product; the Editor can't change them. Tell me if they keep coming up.</p><ul class="small">${qa.listing_notes.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
         ${qa.reasons.length ? `<details><summary class="lbl" style="cursor:pointer">QA's full notes</summary><ol>${qa.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ol></details>` : ""}
         ${p.file_check ? `<p class="small" style="color:${p.file_check.ok ? "var(--good)" : "var(--bad)"}">${p.file_check.ok ? "✓ File check passed" : "File check failed: " + esc((p.file_check.errors || []).slice(0, 2).join("; "))}</p>` : ""}
       </div>` : ""}
+    ${roundsBlock(p)}
     ${editsBlock(p)}
     ${onEtsy ? `<div class="sec"><h2>Changes</h2><p class="muted">This is on Etsy now, so make changes in the Etsy app.</p></div>`
       : p.state === "editing" ? `<div class="sec"><h2>Changes</h2><p class="muted">It's with the Editor. Take it back above if you want to change the request or rebuild it instead.</p></div>` : feedbackBlock(p)}

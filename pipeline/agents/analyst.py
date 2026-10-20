@@ -76,8 +76,7 @@ class AnalystAgent(Agent):
                 f"Drafted/published listings with stats:\n{json.dumps(catalog, indent=1, default=str)}\n\n"
                 f"Receipts last 30 days: {len(receipts)}\n\n"
                 f"Recent QA rejections (niche, type, reasons):\n{json.dumps([[n, t, (q or {}).get('reasons')] for n, t, q in rejections], indent=1)}")
-        result = self.ask(session, task="analyst_summary", model=self.settings.model_research, user=user)
-        analysis = result.json()
+        analysis, _ = self.ask_json(session, task="analyst_summary", model=self.settings.model_research, user=user)
         note = (f"WEEKLY SUMMARY (run {self.run_id})\n{analysis.get('summary', '')}\n\n"
                 f"Guidance for Researcher:\n{analysis.get('guidance_for_researcher', '')}\n\n"
                 f"Top performers: {json.dumps(analysis.get('top_performers', []))}\n"

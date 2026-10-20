@@ -14,7 +14,7 @@ from pipeline.db import session_scope
 from pipeline.db.events import EventKind, prune_events, record_event
 from pipeline.db.models import Run, RunStatus
 from pipeline.guardrails.caps import CapReached, check_spend_cap
-from pipeline.llm import ImageInput, LLMClient, LLMResult, get_llm
+from pipeline.llm import ImageInput, LLMClient, LLMError, LLMResult, get_llm
 from pipeline.logging_setup import get_logger, set_run_context
 from pipeline.prompts import load_prompt
 
@@ -109,7 +109,7 @@ class Agent:
         if kind == "image":
             self._usage["images"] += 1
         # Persist incrementally so a crash mid-run still reflects spend.
-        run = session.get(Run, self.run_id)
+        run = session.get(Run, self.run_id) if self.run_id is not None else None
         if run:
             run.cost_usd = round(self._run_cost, 6)
             run.usage_json = dict(self._usage)
@@ -127,6 +127,31 @@ class Agent:
         self._usage["output_tokens"] += result.output_tokens
         self.record_cost(session, result.cost_usd)
         return result
+
+    def ask_json(self, session: Session, *, task: str, model: str, user: str, images: list[ImageInput] | None = None,
+                 max_tokens: int = 8192, temperature: float = 0.7, prompt: str | None = None,
+                 retries: int = 1) -> tuple[Any, LLMResult]:
+        """ask() + parse the reply as JSON. If the model wrapped it in prose or broke the syntax, ask once
+        more (pointing at the problem) instead of failing the item. Returns (data, last result);
+        cost of every attempt is recorded on the run; callers add result.cost_usd to the product."""
+        result = self.ask(session, task=task, model=model, user=user, images=images, max_tokens=max_tokens,
+                          temperature=temperature, prompt=prompt)
+        total_cost = result.cost_usd
+        for attempt in range(retries + 1):
+            try:
+                data = result.json()
+                return data, LLMResult(result.text, result.model, result.input_tokens, result.output_tokens, total_cost, result.raw)
+            except LLMError as e:
+                if attempt == retries or result.truncated:
+                    raise
+                self.log.warning("reply was not valid JSON; asking again", task=task, error=str(e)[:160])
+                result = self.ask(session, task=task, model=model, images=images, max_tokens=max_tokens,
+                                  temperature=temperature, prompt=prompt,
+                                  user=(f"{user}\n\nYour previous reply could not be parsed as JSON ({str(e)[:120]}). "
+                                        "Reply with ONLY the JSON object: no prose before or after it, no comments, "
+                                        "escape line breaks inside strings as \\n."))
+                total_cost += result.cost_usd
+        raise AssertionError("unreachable")
 
     def should_stop(self) -> bool:
         """True once the owner pressed Stop for this run (checked between items, never mid-item)."""

@@ -115,11 +115,50 @@ def _title(p: Product) -> str:
     return str(listing.get("title") or plan.get("title_hint") or (p.brief_json or {}).get("concept") or f"Product {p.id}")
 
 
+def _rounds(brief: dict) -> list[dict[str, Any]]:
+    """One entry per QA'd version (build, rebuild, polish): what was asked, what QA confirmed."""
+    out = []
+    for h in brief.get("qa_history") or []:
+        checks = [c for c in h.get("requested_changes") or [] if isinstance(c, dict)]
+        out.append({"round": h.get("round"), "kind": h.get("kind"), "by": h.get("by"), "at": h.get("at"),
+                    "pass": h.get("pass"), "scores": h.get("scores") or {}, "asked": h.get("asked") or [],
+                    "checks": [{"change": str(c.get("change")), "done": bool(c.get("done")), "note": c.get("note")} for c in checks],
+                    "done": sum(1 for c in checks if c.get("done")), "total": len(checks),
+                    "reasons": h.get("reasons") or [], "improvements": h.get("improvements") or [],
+                    "listing_notes": h.get("listing_notes") or []})
+    return out
+
+
+def _round_now(brief: dict, state: str) -> dict[str, Any]:
+    """Where the product is in its build/polish cycle, for the card."""
+    revs, edits = brief.get("revisions_done") or [], brief.get("edits_done") or []
+    n = 1 + len(revs) + len(edits)
+    last_rev, last_edit = (revs or [{}])[-1], (edits or [{}])[-1]
+    if brief.get("edit"):
+        kind, n = "polish", n + 1
+    elif brief.get("revision"):
+        kind, n = "rebuild", n + 1
+    elif last_edit and int(last_edit.get("completed_run") or 0) > int(last_rev.get("completed_run") or 0):
+        kind = "polish"
+    elif last_rev:
+        kind = "rebuild"
+    else:
+        kind = "build"
+    history = brief.get("qa_history") or []
+    last_qa = history[-1] if history else None
+    checks = [c for c in (last_qa or {}).get("requested_changes") or [] if isinstance(c, dict)]
+    return {"n": n, "kind": kind, "pending": bool(brief.get("edit") or brief.get("revision")),
+            "last_qa": {"pass": last_qa.get("pass"), "done": sum(1 for c in checks if c.get("done")), "total": len(checks),
+                        "round": last_qa.get("round")} if last_qa else None,
+            "rounds_rejected": sum(1 for h in history if not h.get("pass"))}
+
+
 def _card(p: Product) -> dict[str, Any]:
     brief = p.brief_json or {}
     qa = p.qa_result_json or {}
     reasons = qa.get("reasons") or []
     return {
+        "round": _round_now(brief, p.state),
         **product_summary(p), "title": _title(p)[:120], "stage": STATE_LABEL.get(p.state, p.state),
         "type_label": TYPE_LABEL.get(p.product_type, p.product_type),
         "price": (p.listing_json or {}).get("price") or brief.get("target_price_usd"),
@@ -319,7 +358,7 @@ def product(product_id: int):
             raise HTTPException(404, "unknown product")
         brief = {k: v for k, v in (p.brief_json or {}).items()
                  if k not in ("creator_plan", "market", "run_id", "create_attempts", "last_create_error", "niche",
-                              "revision", "revisions_done", "edit", "edits_done", "last_edit_error")}
+                              "revision", "revisions_done", "edit", "edits_done", "last_edit_error", "qa_history")}
         notes = s.execute(select(OwnerNote).where(OwnerNote.product_id == product_id)
                           .order_by(OwnerNote.id.asc())).scalars().all()
         plan = (p.brief_json or {}).get("creator_plan") or {}
@@ -340,6 +379,7 @@ def product(product_id: int):
         full = p.brief_json or {}
         edits = [{"round": e.get("round"), "note": e.get("note"), "improvements": e.get("improvements") or [],
                   "changes_made": e.get("changes_made") or [], "kept": e.get("kept") or [], "failed": bool(e.get("failed")),
+                  "skipped": e.get("skipped") or [],
                   "error": e.get("error"), "cost_usd": e.get("cost_usd"), "model": e.get("model"),
                   "requested_at": e.get("requested_at"), "previous_scores": (e.get("previous_qa") or {}).get("scores") or {},
                   "before": [f"/api/dashboard/product/{p.id}/before/{i}/{j}" for j in range(len(e.get("previous_images") or []))]}
@@ -357,7 +397,9 @@ def product(product_id: int):
             "qa": {"passed": qa.get("pass"), "scores": qa.get("scores") or {}, "reasons": qa.get("reasons") or [],
                    "ip_concerns": qa.get("ip_concerns") or [], "checks": qa.get("checks") or {},
                    "verdict": qa.get("verdict"), "improvements": qa.get("improvements") or [],
+                   "listing_notes": qa.get("listing_notes") or [], "requested_changes": qa.get("requested_changes") or [],
                    "reviewed": qa.get("reviewed")} if qa else None,
+            "rounds": _rounds(full),
             "file_check": plan.get("file_check"),
             "comments": [_note(n) for n in notes],
             "revision_pending": bool(full.get("revision")),

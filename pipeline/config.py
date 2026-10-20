@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     mockup_scenes: bool = Field(True, alias="MOCKUP_SCENES")
     mockup_quality: Literal["low", "medium", "high"] = Field("medium", alias="MOCKUP_QUALITY")
 
+    # QA bars (1-10): every score must reach QA_MIN_SCORE; design_polish and commercial_viability must
+    # reach QA_MIN_COMMERCIAL_SCORE. 8 = "would list as-is"; 7 = "minor polish away"; start at 7.
+    qa_min_score: int = Field(6, alias="QA_MIN_SCORE")
+    qa_min_commercial_score: int = Field(7, alias="QA_MIN_COMMERCIAL_SCORE")
+
     # caps
     daily_draft_cap: int = Field(10, alias="DAILY_DRAFT_CAP")
     weekly_brief_cap: int = Field(20, alias="WEEKLY_BRIEF_CAP")

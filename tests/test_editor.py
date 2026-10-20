@@ -243,3 +243,69 @@ def test_creator_revision_that_cannot_build_is_not_stuck(session):
     p = session.get(Product, p.id)
     assert p.state == ProductState.REJECTED and "revision" not in p.brief_json
     assert p.brief_json["revisions_done"][0]["failed"]
+
+
+def test_qa_sees_every_listing_image_and_keeps_a_round_history(session, client, monkeypatch):
+    from pipeline.agents.editor import EditorAgent
+    from pipeline.agents.qa import QAAgent
+    from pipeline.db.models import Product
+    from pipeline.llm import MockLLM, get_llm
+
+    p = _built(session, "spreadsheet", "Bookkeeping workbook")  # 6 listing images
+    qa_calls = [c for c in get_llm().calls if c["task"] == "qa_vision"]
+    assert qa_calls[-1]["n_images"] >= 6 + 1  # every listing image, plus the rendered tabs
+    assert "composited automatically" in qa_calls[-1]["user"]
+    hist = p.brief_json["qa_history"]
+    assert len(hist) == 1 and hist[0]["round"] == 1 and hist[0]["kind"] == "build" and hist[0]["pass"]
+
+    # a polish where the Editor declares one request out of scope: QA is told not to count it
+    orig = MockLLM._canned
+
+    def with_skip(task, user):
+        out = orig(task, user)
+        if task == "editor_sheet":
+            out["skipped"] = [{"change": "Add a photo mockup", "why": "listing images are generated automatically"}]
+        return out
+
+    monkeypatch.setattr(MockLLM, "_canned", staticmethod(with_skip))
+    r = client.post(f"/api/dashboard/product/{p.id}/edit", json={"note": "Add a photo mockup", "include_qa": False}, headers=HDR)
+    assert r.status_code == 200
+    EditorAgent().run()
+    QAAgent().run()
+    session.expire_all()
+    p = session.get(Product, p.id)
+    assert p.brief_json["edits_done"][0]["skipped"][0]["why"].startswith("listing images")
+    assert p.state == "approved" and p.qa_result_json["requested_changes"] == []  # the skip is not held against it
+    hist = p.brief_json["qa_history"]
+    assert [h["round"] for h in hist] == [1, 2] and hist[1]["kind"] == "polish" and hist[1]["by"] == "Editor"
+    assert hist[1]["asked"] == []  # the only request was skipped, so nothing is held against the polish
+    d = client.get(f"/api/dashboard/product/{p.id}").json()
+    assert [x["round"] for x in d["rounds"]] == [1, 2] and d["edits"][0]["skipped"]
+    card = next(c for c in client.get("/api/dashboard/products").json()["products"] if c["id"] == p.id)
+    assert card["round"]["n"] == 2 and card["round"]["kind"] == "polish" and card["round"]["last_qa"]["pass"]
+
+
+def test_qa_bars_are_configurable(session, monkeypatch):
+    from pipeline.agents.qa import QAAgent
+    from pipeline.config import reset_settings_cache
+    from pipeline.db.models import Product, ProductState
+    from pipeline.llm import MockLLM
+
+    orig = MockLLM._canned
+
+    def seven(task, user):
+        out = orig(task, user)
+        if task == "qa_vision":
+            out["scores"]["commercial_viability"] = 7
+        return out
+
+    monkeypatch.setattr(MockLLM, "_canned", staticmethod(seven))
+    p = _built(session, "spreadsheet", "Bookkeeping workbook")
+    assert p.state == ProductState.APPROVED  # default bar is 7
+    monkeypatch.setenv("QA_MIN_COMMERCIAL_SCORE", "8")
+    reset_settings_cache()
+    p.state = ProductState.CREATED
+    session.commit()
+    QAAgent().run()
+    session.expire_all()
+    assert session.get(Product, p.id).state == ProductState.REJECTED

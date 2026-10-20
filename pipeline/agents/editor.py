@@ -39,6 +39,19 @@ EDIT_RECORD_KEYS = ("note", "improvements", "round", "requested_at", "previous_s
                     "previous_files", "previous_images")
 
 
+SCOPE_NOTE = {
+    ProductType.PLANNER: "every page's HTML/CSS (layout, type, labels, sections, number of pages), the title and palette",
+    ProductType.TRACKER: "every page's HTML/CSS (layout, type, labels, sections, number of pages), the title and palette",
+    ProductType.SPREADSHEET: "the spreadsheet spec (tabs, columns, dropdowns, formulas, dashboard KPIs and charts, "
+                             "instructions, sample rows), the title and palette",
+    ProductType.WALL_ART: "the artwork itself (through an image edit or a new prompt), the title and palette",
+    ProductType.APPAREL: "the print design HTML/CSS (typography, layout, size of the print within the area, ink colours), "
+                         "the offered blank colours and personalisation fields",
+    ProductType.MUG: "the print design HTML/CSS (typography, layout, size of the print within the area, ink colours), "
+                     "the offered blank colours and personalisation fields",
+}
+
+
 class EditBudgetExceeded(RuntimeError):
     pass
 
@@ -163,17 +176,20 @@ class EditorAgent(CreatorAgent):
         self._budget_start = float(product.cost_usd or 0.0)
         comments = self.open_comments(session, product)
         qa = req.get("previous_qa") or product.qa_result_json or {}
+        kind = product.product_type
 
         changes = requested_changes(req) + [c.text for c in comments]
         checklist = "\n".join(f"- {c}" for c in changes) or "- (none given: raise the overall polish to best-seller level)"
-        instructions = (f"REQUESTED CHANGES (apply every one; QA will check each was made):\n{checklist}\n\n"
+        instructions = (f"REQUESTED CHANGES (apply every one you can; QA will check each was made):\n{checklist}\n\n"
+                        f"SCOPE: you can change {SCOPE_NOTE.get(kind, 'the product design')}. The listing images are "
+                        "composited by code from that; you cannot change mockups, add listing images, overlays or "
+                        "photos. List any request you cannot carry out in `skipped` with the reason; never claim it.\n\n"
                         f"Previous QA review: {json.dumps({k: qa.get(k) for k in ('scores', 'reasons', 'verdict') if qa.get(k)})}\n"
                         f"Brief:\n{json.dumps({**brief, 'product_type': product.product_type}, indent=2)}")
         if self._is_mock_run:
             instructions += "\n(This is a MOCK run; placeholder art is expected.)"
         listing = [ImageInput(data=_shrink(storage.get(p))) for p in (product.image_paths or [])[:3]]
         html = art = None
-        kind = product.product_type
 
         if kind in (ProductType.PLANNER, ProductType.TRACKER):
             current = storage.get(plan["design_html"]).decode("utf-8") if plan.get("design_html") else None
@@ -230,11 +246,13 @@ class EditorAgent(CreatorAgent):
         record = {**{k: req.get(k) for k in EDIT_RECORD_KEYS if k in req}, "round": n_round,
                   "changes_made": [str(c) for c in meta.get("changes_made") or []][:12],
                   "kept": [str(c) for c in meta.get("kept") or []][:8],
+                  "skipped": [{"change": str(s.get("change"))[:200], "why": str(s.get("why") or "")[:200]}
+                              for s in meta.get("skipped") or [] if isinstance(s, dict) and s.get("change")][:8],
                   "previous_files": previous_files, "previous_images": previous_images,
                   "completed_run": self.run_id, "model": self.design_model,
                   "cost_usd": round(float(product.cost_usd or 0.0) - self._budget_start, 4)}
         product.brief_json = {**brief, "creator_plan": new_plan,
-                              **({"revisions_done": full["revisions_done"]} if full.get("revisions_done") else {}),
+                              **{k: full[k] for k in ("revisions_done", "qa_history") if full.get(k)},
                               "edits_done": list(full.get("edits_done") or []) + [record]}
         product.qa_result_json = None  # the previous verdict no longer describes these files
         product.phash = None

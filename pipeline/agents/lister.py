@@ -154,9 +154,10 @@ class ListerAgent(Agent):
                    f"Product: {json.dumps(item.summary() if item else {})}; material: {item.material if item else ''}; "
                    f"ships in {'-'.join(str(d) for d in get_catalog().processing_days)} business days."
                    if physical else f"Files delivered: {[PurePosixPath(p).name for p in product.file_paths]}"))
-        result = self.ask(session, task="lister_copy", model=self.settings.model_worker, user=user)
+        copy, result = self.ask_json(session, task="lister_copy", model=self.settings.model_worker, user=user)
         product.add_cost(result.cost_usd)
-        copy = result.json()
+        if not isinstance(copy, dict):
+            raise RuntimeError("lister: reply was not a JSON object")
 
         title = str(copy.get("title", "")).strip()[:140]
         tags = [str(t).strip().lower()[:20] for t in copy.get("tags", []) if str(t).strip()]
