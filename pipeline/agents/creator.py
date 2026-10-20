@@ -46,7 +46,7 @@ MAX_SHEET_FIXES = 2
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # brief keys that are bookkeeping, not part of the product idea
 INTERNAL_KEYS = ("create_attempts", "last_create_error", "creator_plan", "revision", "revisions_done",
-                 "edit", "edits_done", "last_edit_error")
+                 "edit", "edits_done", "last_edit_error", "qa_history")
 
 
 def revision_note(brief: dict) -> str:
@@ -376,10 +376,11 @@ class CreatorAgent(Agent):
         hero = merch.best_contrast_color(item, sample.png, spec["colors"])
         flat = merch.mockup(item, sample.png, hero)
         photo = self._photo(session, product, images, flat, item, hero)
+        # hero: the photo mockup edge to edge (a padded square reads as a tiny thumbnail on Etsy)
         imgs.append(storage.put(f"{base}/listing-01-primary.png",
-                                mockups.primary_image(photo or flat, bg="#F3F0EB"), "image/png"))
-        if photo:
-            imgs.append(storage.put(f"{base}/listing-02-mockup.png", merch.to_png(flat), "image/png"))
+                                mockups.cover_image(photo) if photo else mockups.primary_image(flat, bg="#F3F0EB"), "image/png"))
+        if photo:  # a close-up of the real photo instead of the flat vector blank
+            imgs.append(storage.put(f"{base}/listing-02-closeup.png", mockups.cover_image(mockups.center_crop(photo, 0.6)), "image/png"))
         if len(spec["colors"]) > 1:
             imgs.append(storage.put(f"{base}/listing-03-colours.png",
                                     merch.to_png(merch.color_chart(item, sample.png, spec["colors"])), "image/png"))
@@ -436,10 +437,9 @@ class CreatorAgent(Agent):
         if product.product_type in ProductType.PHYSICAL:
             items = [i.summary() for i in get_catalog().for_type(product.product_type)]
             user += f"\n\nCatalog items you may use for this product (`merch_spec.item`):\n{json.dumps(items, indent=1)}"
-        result = self.ask(session, task="creator_plan", model=self.settings.model_worker, user=user,
-                          max_tokens=16000)
         try:
-            plan = result.json()
+            plan, result = self.ask_json(session, task="creator_plan", model=self.settings.model_worker, user=user,
+                                         max_tokens=16000)
         except LLMError as e:
             raise RuntimeError(f"creator plan was not valid JSON: {e}") from e
         if isinstance(plan, list):  # model occasionally wraps the object in a list
@@ -458,7 +458,7 @@ class CreatorAgent(Agent):
             rev = {k: v for k, v in full["revision"].items() if k != "previous_plan"}
             done.append({**rev, "completed_run": self.run_id})
         product.brief_json = {**brief, "creator_plan": plan, **({"revisions_done": done} if done else {}),
-                              **({"edits_done": full["edits_done"]} if full.get("edits_done") else {})}
+                              **{k: full[k] for k in ("edits_done", "qa_history") if full.get(k)}}
         for c in comments:
             c.status = "included"
         for n in session.execute(select(OwnerNote).where(OwnerNote.product_id == product.id,
@@ -499,7 +499,7 @@ class CreatorAgent(Agent):
             imgs.append(storage.put(f"{base}/listing-01-primary.png", mockups.primary_image(art_img), "image/png"))
             imgs.append(storage.put(f"{base}/listing-02-room.png",
                                     mockups.scene_composite(art_img, scene, kind="wall") if scene else mockups.framed_mockup(art_img), "image/png"))
-            imgs.append(storage.put(f"{base}/listing-03-detail.png", mockups.detail_crop(art_img), "image/png"))
+            imgs.append(storage.put(f"{base}/listing-03-framed.png", mockups.framed_mockup(art_img, wall="#E7E1D8"), "image/png"))
             sizes = list(PRINT_RATIOS)
             imgs.append(storage.put(f"{base}/listing-04-included.png", self._card(
                 title, [f"Print ratio {s}" for s in sizes] + ["High-resolution PNG files"], palette), "image/png"))

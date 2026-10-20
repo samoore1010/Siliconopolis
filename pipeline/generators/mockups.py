@@ -81,6 +81,22 @@ def primary_image(art: Image.Image, *, bg: str | None = None) -> bytes:
     return _to_png(canvas)
 
 
+def cover_image(img: Image.Image) -> bytes:
+    """Fill the whole listing square with the image (scale up, centre-crop): no borders, big thumbnail."""
+    W, H = LISTING_SIZE
+    scale = max(W / img.width, H / img.height)
+    big = img.convert("RGB").resize((int(img.width * scale) + 1, int(img.height * scale) + 1), Image.LANCZOS)
+    left, top = (big.width - W) // 2, (big.height - H) // 2
+    return _to_png(big.crop((left, top, left + W, top + H)))
+
+
+def center_crop(img: Image.Image, fraction: float = 0.6) -> Image.Image:
+    """The central `fraction` of the image (a close-up of a photo mockup)."""
+    w, h = int(img.width * fraction), int(img.height * fraction)
+    left, top = (img.width - w) // 2, (img.height - h) // 2
+    return img.crop((left, top, left + w, top + h))
+
+
 def document_preview(pdf_title: str, sections: list[str], *, palette: list[str]) -> Image.Image:
     """Render a faux page preview for PDF/XLSX products (used as 'art' for mockups)."""
     W, H = 1700, 2200
@@ -219,9 +235,9 @@ def pages_spread(pages: list[Image.Image], *, bg: str = "#F4EFE8") -> bytes:
     if len(pages) <= 3:
         n = len(pages)
         for i, pg in enumerate(pages):
-            thumb = fit(pg, (int(W * 0.55), int(H * 0.68)))
-            cx = int(W * (0.5 + (i - (n - 1) / 2) * 0.22))
-            _place(canvas, thumb, (cx, int(H // 2 + abs(i - (n - 1) / 2) * 30)), rotate=(i - (n - 1) / 2) * -4)
+            thumb = fit(pg, (int(W * 0.46), int(H * 0.62)))
+            cx = int(W * (0.5 + (i - (n - 1) / 2) * 0.2))
+            _place(canvas, thumb, (cx, int(H // 2 + abs(i - (n - 1) / 2) * 24)), rotate=(i - (n - 1) / 2) * -3)
     else:
         cols, rows = 3, 2
         cw, ch = W // cols, H // rows

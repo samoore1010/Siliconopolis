@@ -141,6 +141,12 @@ input:focus, textarea:focus, select:focus, .btn:focus-visible, a:focus-visible {
 .card .o { color: var(--muted); font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .card .why-bad { font-size: 12.5px; color: var(--bad); background: var(--bad-soft); border-radius: 8px; padding: 6px 8px; }
 .card .why-rev { font-size: 12.5px; background: var(--accent-soft); border-radius: 8px; padding: 6px 8px; }
+.card .round { font-size: 12.5px; color: var(--muted); } .card .round .ok { color: var(--good); font-weight: 600; } .card .round .bad { color: var(--bad); font-weight: 600; }
+ul.checks { list-style: none; margin: 4px 0; padding: 0; }
+ul.checks li { display: grid; grid-template-columns: 18px 1fr; gap: 6px; padding: 3px 0; font-size: 13.5px; }
+ul.checks li.done > span:first-child { color: var(--good); font-weight: 700; } ul.checks li.notdone > span:first-child { color: var(--bad); font-weight: 700; }
+details.round-card { border-top: 1px solid var(--line); padding: 8px 0; } details.round-card summary { cursor: pointer; }
+details.round-card ul { margin: 4px 0; padding-left: 18px; }
 .card .check { position: absolute; top: 10px; left: 10px; width: 26px; height: 26px; border-radius: 8px; background: var(--panel);
   border: 2px solid var(--line); display: grid; place-items: center; font-weight: 700; color: var(--accent-ink); }
 .card.sel .check { background: var(--accent); border-color: var(--accent); }

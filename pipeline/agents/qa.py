@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+from datetime import UTC, datetime
 
 import imagehash
 from PIL import Image
@@ -18,12 +19,39 @@ from pipeline.storage import get_storage
 
 from .base import Agent
 
+
+def requested_changes_of(req: dict) -> list[str]:
+    """Owner note + QA suggestions minus what the Editor declared it could not change."""
+    skipped = {str(s.get("change")).strip().lower() for s in req.get("skipped") or [] if isinstance(s, dict)}
+    out = [str(req.get("note") or "").strip()] if req.get("note") else []
+    out += [str(i) for i in req.get("improvements") or [] if str(i).strip()]
+    return [c for c in out if c.strip().lower() not in skipped]
+
 PHASH_DISTANCE_THRESHOLD = 6  # <= 6 bits differ => near duplicate
-MIN_SCORE = 6
 # The sellability bar: would a buyer choose this over the best sellers at the target price?
+# Thresholds come from settings (QA_MIN_SCORE / QA_MIN_COMMERCIAL_SCORE).
 COMMERCIAL_KEYS = ("design_polish", "commercial_viability")
-MIN_COMMERCIAL_SCORE = 8
 MAX_FILE_IMAGES = 6
+MAX_LISTING_IMAGES = 8
+MAX_HISTORY = 12
+
+# What the listing images are, per product type: they are composited by code from the product, so
+# the designer cannot change how they are made. QA judges the product; image remarks go to listing_notes.
+LISTING_IMAGE_NOTE = {
+    ProductType.WALL_ART: "1 the artwork; 2 a room mockup (AI scene or drawn frame); 3 a framed mockup on a plain wall; "
+                          "4 a 'what's included' card listing the print ratios",
+    ProductType.PLANNER: "1 the first page; 2 a desk/lifestyle mockup; 3 all pages spread out (or a close-up for a "
+                         "single page); 4 a 'what's included' card",
+    ProductType.TRACKER: "1 the first page; 2 a desk/lifestyle mockup; 3 all pages spread out (or a close-up for a "
+                         "single page); 4 a 'what's included' card",
+    ProductType.SPREADSHEET: "1 the Dashboard tab in a window frame; 2 a desk/lifestyle mockup; then real renders of the "
+                             "data tabs, the Start Here tab, and a 'what's included' card",
+    ProductType.APPAREL: "1 an AI photo of the real print on the garment (or a drawn flat mockup when no image "
+                         "provider is set); 2 a close-up of that photo; a colour chart of the offered blanks (drawn "
+                         "blanks); a print close-up; 'how to personalise' and 'product details' cards",
+    ProductType.MUG: "1 an AI photo of the real print on the mug (or a drawn flat mockup); 2 a close-up of that photo; "
+                     "a colour chart; a print close-up; 'how to personalise' and 'product details' cards",
+}
 
 
 def _shrink(png: bytes, long_side: int = 1400) -> bytes:
@@ -112,30 +140,35 @@ class QAAgent(Agent):
             return {"pass": False, "reasons": ["delivered file is broken: " + "; ".join(file_check.get("errors", [])[:5])],
                     "scores": {}, "checks": {"blocklist": "ok", "duplicate": "ok", "file": "fail"}, "file_check": file_check}
 
-        # 4. vision review with Claude: listing images + pages/tabs of the real file
-        listing = [ImageInput(data=_shrink(storage.get(p))) for p in product.image_paths[:3]]
+        # 4. vision review with Claude: every listing image + pages/tabs of the real file
+        listing = [ImageInput(data=_shrink(storage.get(p))) for p in product.image_paths[:MAX_LISTING_IMAGES]]
         files = [ImageInput(data=_shrink(p)) for p in file_pngs[:MAX_FILE_IMAGES]]
         is_mock = self.settings.mode == "mock" and self.settings.app_env == "local"
         mock_hint = "MOCK RUN: placeholder images are expected and acceptable." if is_mock else "LIVE RUN: these are the real product images that will be listed."
         market = brief.get("market") or {}
         owner, asked = self._change_request(brief)
         brief_view = {k: v for k, v in brief.items() if k not in ("creator_plan", "revision", "revisions_done", "market")}
+        bars = f"Pass bars: every score >= {self.settings.qa_min_score}; design_polish and commercial_viability >= {self.settings.qa_min_commercial_score}."
         user = (f"{mock_hint}\n\nBrief:\n{json.dumps(brief_view, indent=2)}\n\n"
                 f"Market context: price range {market.get('price_range') or 'unknown'}; "
                 f"{market.get('summary') or ''}\nTarget price: ${brief.get('target_price_usd', '?')}\n\n"
-                f"Product type: {product.product_type}\n"
-                f"Images 1-{len(listing)} are the listing images. Images {len(listing) + 1}-{len(listing) + len(files)} "
-                f"are {file_note}.{owner}")
-        result = self.ask(session, task="qa_vision", model=self.settings.model_worker, user=user,
-                          images=listing + files, temperature=0.0)
+                f"Product type: {product.product_type}\n{bars}\n"
+                f"Images 1-{len(listing)} are the listing images, composited automatically from the product "
+                f"({LISTING_IMAGE_NOTE.get(product.product_type, 'product views and an included card')}). "
+                f"Images {len(listing) + 1}-{len(listing) + len(files)} are {file_note}.{owner}")
+        verdict, result = self.ask_json(session, task="qa_vision", model=self.settings.model_worker, user=user,
+                                        images=listing + files, temperature=0.0)
         product.add_cost(result.cost_usd)
-        verdict = result.json()
+        if not isinstance(verdict, dict):
+            raise RuntimeError("QA reply was not a JSON object")
         scores = verdict.get("scores", {}) or {}
+
+        min_score, min_commercial = self.settings.qa_min_score, self.settings.qa_min_commercial_score
 
         def low(key: str, value) -> bool:
             if not isinstance(value, (int, float)):
                 return False
-            return float(value) < (MIN_COMMERCIAL_SCORE if key in COMMERCIAL_KEYS else MIN_SCORE)
+            return float(value) < (min_commercial if key in COMMERCIAL_KEYS else min_score)
 
         missing = [k for k in COMMERCIAL_KEYS if k not in scores]
         lows = [k for k, v in scores.items() if low(k, v)]
@@ -153,22 +186,45 @@ class QAAgent(Agent):
             reasons.append(f"ip concerns: {verdict['ip_concerns']}")
         if lows:
             reasons.append("below the bar: " + ", ".join(
-                f"{k} {scores[k]} (needs {MIN_COMMERCIAL_SCORE if k in COMMERCIAL_KEYS else MIN_SCORE})" for k in lows))
+                f"{k} {scores[k]} (needs {min_commercial if k in COMMERCIAL_KEYS else min_score})" for k in lows))
         if missing:
             reasons.append(f"QA did not score {', '.join(missing)}; rejecting on doubt")
-        return {"pass": passed, "scores": scores, "reasons": reasons, "ip_concerns": verdict.get("ip_concerns", []),
-                "verdict": verdict.get("verdict"), "improvements": verdict.get("improvements", []),
-                "requested_changes": checked,
+        out = {"pass": passed, "scores": scores, "reasons": reasons, "ip_concerns": verdict.get("ip_concerns", []),
+               "verdict": verdict.get("verdict"), "improvements": [str(i) for i in verdict.get("improvements", [])][:6],
+               "listing_notes": [str(i) for i in verdict.get("listing_notes", [])][:6],
+               "requested_changes": checked,
                 "reviewed": {"listing_images": len(listing), "file_images": len(files), "file": file_note},
-                "file_check": file_check,
-                "checks": {"blocklist": "ok", "duplicate": "ok", "file": "ok", "vision": "ok" if passed else "fail"}}
+               "file_check": file_check,
+               "checks": {"blocklist": "ok", "duplicate": "ok", "file": "ok", "vision": "ok" if passed else "fail"}}
+        self._remember(product, out)
+        return out
+
+    def _remember(self, product: Product, verdict: dict) -> None:
+        """Keep a compact per-round QA history on the product, so the owner can see what each round
+        (build, rebuild, polish) was asked to change and what QA confirmed, even after later rounds."""
+        brief = dict(product.brief_json or {})
+        revs, edits = brief.get("revisions_done") or [], brief.get("edits_done") or []
+        kind, by, asked = "build", "Creator", []
+        last_rev, last_edit = (revs or [{}])[-1], (edits or [{}])[-1]
+        if last_edit and int(last_edit.get("completed_run") or 0) > int(last_rev.get("completed_run") or 0):
+            kind, by = "polish", "Editor"
+            asked = requested_changes_of(last_edit)
+        elif last_rev:
+            kind, by = "rebuild", "Creator"
+            asked = [ln.lstrip("- ").strip() for ln in str(last_rev.get("feedback") or "").splitlines() if ln.strip()]
+        entry = {"round": 1 + len(revs) + len(edits), "kind": kind, "by": by, "run_id": self.run_id,
+                 "at": datetime.now(UTC).isoformat(), "pass": verdict["pass"], "scores": verdict.get("scores") or {},
+                 "asked": asked[:12], "requested_changes": verdict.get("requested_changes") or [],
+                 "reasons": [str(r)[:300] for r in verdict.get("reasons") or []][:5],
+                 "improvements": verdict.get("improvements") or [], "listing_notes": verdict.get("listing_notes") or []}
+        history = [h for h in brief.get("qa_history") or [] if h.get("run_id") != self.run_id]
+        brief["qa_history"] = (history + [entry])[-MAX_HISTORY:]
+        product.brief_json = brief
 
     @staticmethod
     def _change_request(brief: dict) -> tuple[str, list[str]]:
         """The most recent owner revision or Editor polish, as text for the prompt and as a checklist.
         QA must confirm each item was actually made in the files it is looking at."""
-        from pipeline.agents.editor import requested_changes
-
         pending_rev = brief.get("revision")
         last_rev = (brief.get("revisions_done") or [{}])[-1]
         last_edit = (brief.get("edits_done") or [{}])[-1]
@@ -184,12 +240,16 @@ class QAAgent(Agent):
                     "(confirm each one in the files):\n" + "\n".join(f"- {i}" for i in items))
             return text, items
         if edit and not edit.get("failed"):
-            items = requested_changes(edit)
+            items = requested_changes_of(edit)
+            skipped = [s for s in edit.get("skipped") or [] if isinstance(s, dict) and s.get("change")]
             prev = edit.get("previous_qa") or {}
             text = ("\n\nThis is a POLISHED version by the Editor. REQUESTED CHANGES (confirm each one in the files; "
                     "an ignored request fails the product):\n" + ("\n".join(f"- {i}" for i in items) or "- (none; general polish)")
-                    + (f"\nPrevious version's scores: {json.dumps(prev.get('scores'))}. The polish should score at least as high."
-                       if prev.get("scores") else ""))
+                    + ("\nThe Editor declared these requests outside what it can change (listing images are made by code); "
+                       "do NOT list them in requested_changes:\n" + "\n".join(f"- {s['change']}: {s.get('why', '')}" for s in skipped)
+                       if skipped else "")
+                    + (f"\nPrevious version's scores: {json.dumps(prev.get('scores'))}. The polish should score at least as high "
+                       "on the product itself." if prev.get("scores") else ""))
             return text, items
         return "", []
 

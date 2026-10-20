@@ -141,6 +141,7 @@ See [`.env.example`](.env.example) for the full list. Key ones:
 | `STORAGE_BACKEND` | `local` or `s3` (+ `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) |
 | `MODEL_RESEARCH` / `MODEL_WORKER` / `MODEL_CHEAP` | Claude models per role (Researcher/Analyst, Creator/QA/Lister, order checks) |
 | `MODEL_EDITOR`, `EDITOR_MAX_COST_PER_PRODUCT_USD` | the Editor's (stronger) model and its budget per polish |
+| `QA_MIN_SCORE`, `QA_MIN_COMMERCIAL_SCORE` | QA pass bars (default 6 and 7 of 10); QA judges the product, and keeps remarks about the auto-generated listing images separate |
 | `LLM_PROVIDER` | `anthropic` or `mock`; defaults to anthropic when a key is set |
 | `DAILY_DRAFT_CAP`, `WEEKLY_BRIEF_CAP`, `MAX_DAILY_SPEND_USD` | hard caps; hitting one stops the run (exit 3) |
 | `VILLAGE_USER`, `VILLAGE_PASSWORD` | basic auth for the dashboard, status and OAuth start routes (required off-local) |
