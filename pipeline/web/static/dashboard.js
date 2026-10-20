@@ -16,7 +16,7 @@ const QUEUES = {
     intro: (n, at) => `The Creator builds the top ${n} ideas each morning, one at a time, in this order. Next build: <b>${esc(until(at))}</b>. Drag to reorder (or use the arrows); changes count even while it's running.`,
     empty: `Nothing waiting. New ideas arrive with each research run; you can also <a href="#research">brief the next run</a>.` },
   editor: { api: "/api/dashboard/queue/editor", filter: "polish", verb: "polishing", noun: "product", next: "Polish next", remove: "Take back",
-    intro: (n, at) => `The Editor polishes up to ${n} products per run, one at a time, in this order, with a stronger model than the Creator. It checks for work every hour; next check: <b>${esc(until(at))}</b>. Each polished product goes back through QA.`,
+    intro: (n, at) => `The Editor polishes up to ${n} products per run, one at a time, in this order, with a stronger model than the Creator. It starts within a minute of something being sent to it. Each polished product goes back through QA.`,
     empty: `Nothing waiting. Open any built, approved or rejected product and choose <b>Polish it</b> to send it here.` },
 };
 const STATE_WORD = { working: "Working", idle: "Idle", sleeping: "Asleep", waiting_human: "Waiting on you", needs_you: "Needs you", cap_reached: "At a limit", error: "Problem", stale_lock: "Stuck" };
@@ -112,7 +112,25 @@ function activityHTML(list, limit) {
 }
 const thumb = (p) => (p.thumb ? `background-image:url('${esc(p.thumb)}')` : "");
 
-/* ---------------------------------------------------------------- stop & working */
+/* ---------------------------------------------------------------- run now, stop & working */
+async function runNow(agent, label, after) {
+  try {
+    const r = await send("POST", `/api/dashboard/agents/${agent}/run`);
+    toast(r.via === "worker" ? `${label} starts within a few seconds.` : `${label} started.`);
+    after && after();
+  } catch (e) { toast(e.message, true); }
+}
+function runButton(agent, label, cls = "btn small") {
+  const o = store.overview;
+  if (o && o.run_now_available === false) return "";
+  const queued = o?.worker?.jobs?.find((j) => j.agent === agent);
+  return queued ? `<span class="muted small">${queued.status === "running" ? "Starting…" : "Queued to run"}</span>`
+    : `<button class="${cls}" data-run="${esc(agent)}" data-label="${esc(label)}">Run now</button>`;
+}
+function wireRuns(root, after) {
+  $$("[data-run]", root).forEach((b) => (b.onclick = async (e) => { e.stopPropagation(); b.disabled = true; await runNow(b.dataset.run, b.dataset.label, after); }));
+}
+
 async function stopAgent(agent, label) {
   const msg = {
     creator: "It finishes the product it's building now, keeps everything built so far, and stops. The rest of the queue waits for the next build.",
@@ -224,7 +242,8 @@ async function renderHome(view) {
   renderHome.t = setTimeout(tick, o.working?.length ? 8000 : 30000);
 }
 function fillHome(o) {
-  $("#working").innerHTML = workingHTML(o.working);
+  const queued = (o.worker?.jobs || []).filter((j) => !o.working.some((w) => w.agent === j.agent));
+  $("#working").innerHTML = workingHTML(o.working) + (queued.length ? `<div class="muted small" style="margin:0 0 10px">Starting shortly: ${queued.map((j) => esc(j.label)).join(", ")}</div>` : "");
   if (o.working?.length) $("#working").firstElementChild.style.marginBottom = "8px";
   wireStops($("#working"), async () => fillHome(await refreshOverview()));
   const urgent = o.needs_you.filter((n) => n.level === "action" || n.level === "review");
@@ -327,7 +346,8 @@ async function drawQueue(worker) {
   if (current !== "products" || store.filter !== Q.filter) return;
   const live = d.worker;
   const left = live ? Math.max(0, (live.planned || d.batch_size) - live.items - d.building.length) : d.batch_size;
-  const head = live ? workingHTML([live], true) : `<div class="banner neutral"><span>${Q.intro(d.batch_size, d.next_run_at)}</span></div>`;
+  const head = live ? workingHTML([live], true)
+    : `<div class="banner neutral"><span>${Q.intro(d.batch_size, d.next_run_at)}</span>${d.queue.length ? runButton(worker, AGENT_LABEL[worker], "btn primary") : ""}</div>`;
   const row = (p, i) => `
     <li class="qrow" draggable="true" data-id="${p.id}">
       <span class="grip" aria-hidden="true">⋮⋮</span><span class="pos">${i + 1}</span>
@@ -345,6 +365,7 @@ async function drawQueue(worker) {
     ${live && !left ? `<p class="muted small">This run is about to finish; these are handled next time.</p>` : ""}
     ${d.queue.length ? `<ol class="queue-list" id="qlist">${left === 0 ? `<li class="cut">After this run (${d.queue.length})</li>` : ""}${d.queue.map(row).join("")}</ol>` : `<div class="panel pad muted">${Q.empty}</div>`}`;
   wireStops($("#banner"), () => drawQueue(worker));
+  wireRuns($("#banner"), async () => { await refreshOverview().catch(() => {}); drawQueue(worker); });
   const order = () => $$("#qlist .qrow").map((li) => +li.dataset.id);
   const save = async (ids, msg) => {
     try { await send("POST", `${Q.api}/order`, { ids }); if (msg) toast(msg); drawQueue(worker); }
@@ -380,7 +401,7 @@ async function drawQueue(worker) {
   // keep the "later run" divider honest after a drag
   const cut = $("#qlist .cut"); if (cut) cut.ondragover = (e) => e.preventDefault();
   clearTimeout(drawQueue.t);
-  if (live) drawQueue.t = setTimeout(() => { if (!$("#qlist .dragging")) drawQueue(worker); }, 8000);
+  if (live || store.overview?.worker?.jobs?.some((j) => j.agent === worker)) drawQueue.t = setTimeout(() => { if (!$("#qlist .dragging")) drawQueue(worker); }, 8000);
 }
 
 async function deleteProducts(ids, state, n) {
@@ -594,7 +615,7 @@ async function renderResearch(view) {
         <li>That run works only on your brief, makes up to the number of ideas you chose, and is then done with it. It doesn't carry over to later runs.</li>
         <li>The ideas appear below and in Products, with the market research behind them.</li>
         <li>With no brief waiting, the Researcher works through its usual niche list.</li></ol>
-        ${d.run_now_available ? "" : `<p class="small" style="margin:12px 0 0">Want it sooner? “Run now” works once RAILWAY_API_TOKEN and RAILWAY_SERVICE_IDS are set in Railway.</p>`}</div>
+        ${d.run_now_available ? "" : `<p class="small" style="margin:12px 0 0">Want it sooner? “Run now” needs the in-app worker (WORKER_ENABLED=true on the web service).</p>`}</div>
     </div>
     <div class="section-title"><h2>Past runs</h2></div>
     <div class="runs" id="runs"></div>`;
@@ -622,7 +643,7 @@ async function renderResearch(view) {
         <div class="focus">${esc(b.focus)}</div>
         <div class="muted small" style="margin-top:6px">${b.idea_count} ideas · ${b.product_types.length ? b.product_types.map((t) => esc(d.types.find((x) => x.key === t)?.label || t)).join(", ") : "any product type"}${b.note ? ` · ${esc(b.note)}` : ""}</div></div>
       <div class="acts">${b.status === "queued" ? `
-        ${i === 0 && d.run_now_available ? `<button class="btn small primary" data-a="run">Run now</button>` : ""}
+        ${i === 0 && d.run_now_available ? `<button class="btn small primary" data-a="run">Research now</button>` : ""}
         <button class="btn small" data-a="edit">Edit</button><button class="btn small danger" data-a="cancel">Cancel</button>` : ""}</div>
     </div>`).join("");
   $$("#queue .qbrief").forEach((el) => {
@@ -640,7 +661,7 @@ async function renderResearch(view) {
         try { await send("DELETE", `/api/dashboard/research/briefs/${b.id}`); toast("Brief cancelled."); await renderResearch(view); refreshOverview().catch(() => {}); } catch (e) { toast(e.message, true); }
       }
       if (btn.dataset.a === "run") {
-        try { await send("POST", "/api/dashboard/research/run-now"); toast("Research run started. Ideas appear here in a few minutes."); } catch (e) { toast(e.message, true); }
+        try { await send("POST", "/api/dashboard/research/run-now"); toast("Research starts within a few seconds. Ideas appear here in a few minutes."); } catch (e) { toast(e.message, true); }
       }
     }));
   });
@@ -719,7 +740,7 @@ async function renderTeam(view) {
   const [v, o] = await Promise.all([api("/api/village/state"), refreshOverview()]);
   const nextFor = (name) => o.schedule.find((s) => s.key === (["qa", "lister"].includes(name) ? "creator" : name));
   view.innerHTML = `
-    <div class="page-head"><div><h1>Team</h1><p>${v.agents.length} agents, each with one job. Click one to see its recent runs and any problems.</p></div></div>
+    <div class="page-head"><div><h1>Team</h1><p>${v.agents.length} agents, each with one job. Click one to see its recent runs and any problems.</p><p class="small" id="worker-note"></p></div></div>
     <div class="team">${v.agents.map((a) => {
       const last = a.last_run, nx = nextFor(a.name);
       return `<div class="panel agent" data-name="${esc(a.name)}" tabindex="0" role="button">
@@ -727,14 +748,20 @@ async function renderTeam(view) {
           <div><b>${esc(a.title)}</b><div class="muted small">${esc(a.role)}</div></div>
           <span class="state ${esc(a.state)}">${esc(STATE_WORD[a.state] || a.state)}</span></div>
         <div class="small">${esc(a.state_reason)}${a.current_item ? `: <b>${esc(a.current_item)}</b>` : ""}</div>
-        ${a.running && STOPPABLE.includes(a.name) ? (a.running.stop_requested ? `<div class="muted small">Stopping after the current item…</div>`
-          : `<div><button class="btn small" data-stop="${esc(a.name)}">Stop after this one</button></div>`) : ""}
+        <div>${a.running ? (STOPPABLE.includes(a.name) ? (a.running.stop_requested ? `<span class="muted small">Stopping after the current item…</span>`
+          : `<button class="btn small" data-stop="${esc(a.name)}">Stop after this one</button>`) : "") : runButton(a.name, a.title)}</div>
         <div class="muted small">${last ? `Last run ${esc(ago(last.ended_at || last.started_at))}: ${plural(last.items, "item")}, ${money(last.cost_usd)}${last.errors.length ? `, <span style="color:var(--bad)">${plural(last.errors.length, "problem")}</span>` : ""}` : "Hasn't run yet"}${nx ? ` · next ${esc(until(nx.at))}` : ""}</div>
       </div>`; }).join("")}</div>
     <div class="section-title"><h2>Everything that happened</h2></div>
     <div class="panel pad"><ul class="feed">${activityHTML(o.activity, 60)}</ul></div>`;
   $$(".agent").forEach((el) => { el.onclick = () => openAgent(el.dataset.name); el.onkeydown = (e) => { if (e.key === "Enter") openAgent(el.dataset.name); }; });
   wireStops(view, () => renderTeam(view));
+  wireRuns(view, () => renderTeam(view));
+  const w = o.worker || {};
+  $("#worker-note").innerHTML = w.enabled
+    ? (w.alive ? `The agents run inside the web service: QA, the Editor and the Lister start within seconds of something reaching their queue; the rest keep their schedule. ${w.jobs?.length ? `Queued to run now: ${w.jobs.map((j) => esc(j.label)).join(", ")}.` : ""}`
+      : `<span style="color:var(--bad)">The in-app worker isn't running${w.error ? `: ${esc(w.error)}` : ""}.</span>`)
+    : `<span style="color:var(--warn)">The in-app worker is off (WORKER_ENABLED=false); agents run only from Railway cron services.</span>`;
 }
 async function openAgent(name) {
   const a = await api(`/api/village/agent/${name}`);
@@ -743,20 +770,16 @@ async function openAgent(name) {
     <div class="dhead"><div class="meta"><span class="state ${esc(a.state)}" style="margin:0">${esc(STATE_WORD[a.state] || a.state)}</span><span>${esc(a.schedule)}</span></div>
       <h1><span style="display:inline-grid;place-items:center;width:34px;height:34px;border-radius:10px;font-size:18px;vertical-align:middle;margin-right:8px;color:#0e1016;background:${AGENT_COLOR[name] || "#ccc"}">${esc(a.title[0])}</span>${esc(a.title)}</h1>
       <p class="muted" style="margin:0">${esc(a.role)}</p>
-      <div class="dactions">${a.running && STOPPABLE.includes(name)
-        ? (a.running.stop_requested ? `<span class="muted">Stopping after the current item…</span>` : `<button class="btn" data-stop="${esc(name)}">Stop after this one</button>`)
-        : `<button class="btn" id="run-now" ${a.run_now_available ? "" : "disabled"}>Run now</button>`}</div>
-      ${a.run_now_available ? "" : `<p class="muted small" style="margin:0">“Run now” needs RAILWAY_API_TOKEN and RAILWAY_SERVICE_IDS on the web service.</p>`}</div>
+      <div class="dactions">${a.running
+        ? (STOPPABLE.includes(name) ? (a.running.stop_requested ? `<span class="muted">Stopping after the current item…</span>` : `<button class="btn" data-stop="${esc(name)}">Stop after this one</button>`) : `<span class="muted">Running now</span>`)
+        : runButton(name, a.title, "btn")}</div>
+      ${a.run_now_available ? "" : `<p class="muted small" style="margin:0">“Run now” needs the in-app worker (WORKER_ENABLED=true on the web service).</p>`}</div>
     <div class="sec"><h2>Right now</h2><p>${esc(a.state_reason)}${a.current_item ? `: <b>${esc(a.current_item)}</b>` : ""}</p>
       <p class="muted small">Today: ${plural(a.runs_today, "run")}, ${plural(a.items_today, "item")}, ${money(a.cost_today)} · ${a.input_count} waiting for it</p></div>
     <div class="sec"><h2>Recent runs</h2><ul class="timeline">${a.runs.map((r) => `<li>${pill(r.status)} <time>${esc(when(r.started_at))}</time>${plural(r.items, "item")} · ${money(r.cost_usd)}
       ${r.errors.length ? `<pre class="spec">${esc(r.errors.join("\n"))}</pre>` : ""}</li>`).join("") || "<li class='muted'>No runs yet.</li>"}</ul></div>`;
   wireStops($("#detail"), () => openAgent(name));
-  if ($("#run-now")) $("#run-now").onclick = async (e) => {
-    e.target.disabled = true;
-    try { await send("POST", `/api/village/run/${name}`); toast(`${a.title} started.`); }
-    catch (err) { toast(err.message, true); }
-  };
+  wireRuns($("#detail"), async () => { await refreshOverview().catch(() => {}); openAgent(name); });
   openDrawer(`agent/${name}`);
 }
 

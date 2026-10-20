@@ -19,7 +19,7 @@ Analyst ◄── sales/stats ◄── Etsy ◄── [drafted] ◄────
 - **Researcher** (weekly) proposes ideas from niches, your run briefs and the Analyst's notes.
 - **Creator** (daily) builds first drafts: Claude-designed planner pages, verified spreadsheets,
   AI wall art, shirt/mug prints, plus listing images.
-- **Editor** (owner-triggered, hourly cron) is a senior designer on a stronger model (Opus by
+- **Editor** (owner-triggered, starts within a minute) is a senior designer on a stronger model (Opus by
   default). You send it a built, approved or rejected product with an optional note; QA's
   improvement suggestions go along. It edits rather than rebuilds, keeps what works, raises the
   polish, and sends the result back through QA, which checks each requested change was made. It
@@ -31,9 +31,13 @@ Analyst ◄── sales/stats ◄── Etsy ◄── [drafted] ◄────
 - **Analyst** (weekly) reads stats and sales back into research notes.
 - **Fulfiller** (hourly) turns shirt/mug orders into print jobs for the family print shop.
 
-Agents talk only through the `products` table (a queue keyed by `state`). Every agent run is an
-independent process that claims rows with a compare-and-swap lock, does its work, records a `runs`
-row (counts, errors, token/image cost) and exits — which is exactly what Railway cron services need.
+Agents talk only through the `products` table (a queue keyed by `state`). Every agent run claims
+rows with a compare-and-swap lock, does its work and records a `runs` row (counts, errors,
+token/image cost). The web service runs them through an in-app worker (`pipeline/worker.py`): QA,
+the Editor and the Lister start within seconds of work reaching their queue, the Researcher /
+Creator / Analyst / Fulfiller keep their schedule, and every "Run now" button just queues a job.
+Each agent is also runnable as a one-shot process (`python -m pipeline run <agent>`), so Railway
+cron services remain an optional backstop.
 
 Spec: [`etsy-agent-pipeline-instructions_1.md`](etsy-agent-pipeline-instructions_1.md) and the
 village UI addendum [`village-addendum.md`](village-addendum.md). Deployment: [`DEPLOY.md`](DEPLOY.md).
@@ -114,7 +118,8 @@ images to `storage/products/<id>-<slug>/`.
 | `python -m pipeline run-all` | every agent once, in pipeline order | worst |
 | `python -m pipeline status [--json]` | counts by state, recent runs, spend | 0 |
 | `python -m pipeline smoke [--json]` | DB, storage, Anthropic, Etsy, Printify (live only), image provider | 0 pass / 1 fail |
-| `python -m pipeline web` | village dashboard at `/village`, `/api/village/*`, `/status`, `/health`, Etsy OAuth routes | — |
+| `python -m pipeline web` | the app (`/dashboard`, `/village`, `/print`, APIs, `/status`, `/health`, Etsy OAuth) **and the in-app worker** | — |
+| `python -m pipeline worker` | the worker loop alone (if you prefer a separate always-on process) | — |
 | `python -m pipeline demo [--cycles N --sleep S --reset]` | mock-only loop that animates the village; refuses in production | 0 / 2 refused |
 | `python -m pipeline migrate` | `alembic upgrade head` | 0 |
 | `--dry-run` (global flag) | live reads, no external writes | — |
@@ -139,7 +144,8 @@ See [`.env.example`](.env.example) for the full list. Key ones:
 | `LLM_PROVIDER` | `anthropic` or `mock`; defaults to anthropic when a key is set |
 | `DAILY_DRAFT_CAP`, `WEEKLY_BRIEF_CAP`, `MAX_DAILY_SPEND_USD` | hard caps; hitting one stops the run (exit 3) |
 | `VILLAGE_USER`, `VILLAGE_PASSWORD` | basic auth for the dashboard, status and OAuth start routes (required off-local) |
-| `RAILWAY_API_TOKEN`, `RAILWAY_SERVICE_IDS` | optional: enable the per-agent "Run now" buttons |
+| `WORKER_ENABLED`, `WORKER_POLL_SECONDS`, `WORKER_RETRY_MINUTES` | the in-app worker (on by default) |
+| `RAILWAY_API_TOKEN`, `RAILWAY_SERVICE_IDS` | legacy "Run now" through Railway cron services, only when the worker is off |
 | `PRINT_USER`, `PRINT_PASSWORD`, `ETSY_SHIPPING_PROFILE_ID`, `ETSY_PRODUCTION_PARTNER_ID` | in-house merch: the print shop's login and Etsy ids (see `DEPLOY.md`) |
 
 Other config files: `niches.yaml` (seeded with three placeholder niches), `blocklist.txt` (IP safety
@@ -194,7 +200,9 @@ Dockerfile             single image for every service
 tests/                 unit, contract, draft-only, end-to-end (mock)
 ```
 
-## Schedule (Railway, UTC) — Phoenix is UTC-7 year-round
+## Schedule — Phoenix is UTC-7 year-round
+
+Kept by the in-app worker (`pipeline/schedule.py`); the cron lines are the optional Railway backstop.
 
 | Service | Cron (UTC) | Phoenix | Command |
 |---|---|---|---|
@@ -202,7 +210,8 @@ tests/                 unit, contract, draft-only, end-to-end (mock)
 | `daily-pipeline` | `0 14 * * *` | daily 7:00 AM | `python -m pipeline run daily` |
 | `analyst` | `0 3 * * 1` | Sun 8:00 PM | `python -m pipeline run analyst` |
 | `fulfiller` | `0 * * * *` | hourly | `python -m pipeline run fulfiller` |
-| `editor` | `30 * * * *` | hourly | `python -m pipeline run editor` (exits at once when the polish queue is empty) |
+| `editor` | reacts to its queue | — | `python -m pipeline run editor` (optional cron: `30 * * * *`) |
+| QA, Lister | react to their queues | — | part of `run daily` in the optional cron |
 | `web` | always on | — | `python -m pipeline web` (pre-deploy: `alembic upgrade head`) |
 
 ## What is mocked / what the owner must supply

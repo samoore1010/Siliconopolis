@@ -29,7 +29,9 @@ def get_engine() -> Engine:
             def _sqlite_pragmas(dbapi_conn, _record):  # pragma: no cover
                 cur = dbapi_conn.cursor()
                 cur.execute("PRAGMA journal_mode=WAL")
-                cur.execute("PRAGMA busy_timeout=5000")
+                # SQLite has one writer at a time: while the in-app worker is mid-item, a dashboard write
+                # waits for that item to commit (reads never block in WAL mode). Local dev only; Railway uses Postgres.
+                cur.execute("PRAGMA busy_timeout=30000")
                 cur.close()
 
     return _engine

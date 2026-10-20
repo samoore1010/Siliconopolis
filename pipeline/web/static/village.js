@@ -309,7 +309,7 @@ async function openAgent(name) {
     ${kv({ "runs today": a.runs_today, "items today": a.items_today, "cost today": `$${a.cost_today.toFixed(3)}`, "waiting in queue": `${a.input_count} (${a.input_state || "n/a"})`, "locked rows": a.locked_count })}
     <h4>Run now</h4>
     <button class="btn" id="run-now" ${a.run_now_available ? "" : "disabled"}>Run ${esc(a.title)} now</button>
-    <p class="note">${a.run_now_available ? "Triggers the Railway cron service; caps, locks and draft-only apply as usual." : "Disabled: set RAILWAY_API_TOKEN and RAILWAY_SERVICE_IDS on the web service. No button can ever publish a listing."}</p>
+    <p class="note">${a.run_now_available ? "Starts a normal run within seconds; caps, locks and draft-only apply as usual." : "Disabled: enable the in-app worker (WORKER_ENABLED=true) on the web service. No button can ever publish a listing."}</p>
     <h4>Recent runs</h4><ul class="list">${runs}</ul>`);
   const btn = $("run-now"); if (btn && !btn.disabled) btn.onclick = async () => { btn.disabled = true; btn.textContent = "triggering…"; try { const r = await fetch(`/api/village/run/${name}`, { method: "POST", headers: { "X-Siliconopolis": "1" } }); btn.textContent = r.ok ? "triggered ✓" : `failed (${r.status})`; } catch { btn.textContent = "failed"; } };
 }

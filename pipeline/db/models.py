@@ -121,6 +121,29 @@ class Run(Base):
     usage_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
 
 
+class JobStatus:
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class JobRequest(Base):
+    """"Run now" from the dashboard: a row the in-app worker picks up within seconds. No Railway API needed."""
+
+    __tablename__ = "job_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="owner")  # owner | schedule | queue
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=JobStatus.QUEUED, index=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
 class OAuthToken(Base):
     """Persisted OAuth tokens. Etsy rotates the refresh token on every refresh, so env vars only seed this."""
 
