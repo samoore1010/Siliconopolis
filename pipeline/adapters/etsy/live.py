@@ -39,6 +39,11 @@ AUTH_URL = "https://www.etsy.com/oauth/connect"
 SCOPES = ["listings_r", "listings_w", "listings_d", "shops_r", "transactions_r"]
 
 
+def manage_url(listing_id: str) -> str:
+    """The Shop Manager edit page: works for drafts (the public URL does not) and for active listings."""
+    return f"https://www.etsy.com/your/shops/me/tools/listings/{listing_id}"
+
+
 class Throttle:
     """Simple token-bucket style client-side limiter (Etsy ~10 req/s, ~10k/day)."""
 
@@ -184,8 +189,9 @@ class LiveEtsyClient(EtsyClient):
         data = self._request("POST", f"/shops/{self.shop_id}/listings", write=True, data=payload)
         if data.get("dry_run"):
             return DraftListing(listing_id="dry-run", state="draft", title=payload.get("title", ""), raw=data)
+        # Etsy's `url` is the public listing page, which says "unavailable" for a draft; link to Shop Manager.
         return DraftListing(listing_id=str(data["listing_id"]), state=data.get("state", "draft"),
-                            title=data.get("title", ""), url=data.get("url"), raw=data)
+                            title=data.get("title", ""), url=manage_url(str(data["listing_id"])), raw=data)
 
     def upload_listing_image(self, listing_id: str, data: bytes, filename: str, rank: int = 1) -> dict[str, Any]:
         return self._request("POST", f"/shops/{self.shop_id}/listings/{listing_id}/images", write=True,

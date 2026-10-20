@@ -122,7 +122,8 @@ production.
 | `MODEL_EDITOR` | `claude-opus-5-5` | same | the Editor's model; stronger than the Creator's by design |
 | `EDITOR_MAX_COST_PER_PRODUCT_USD` | `1` | `3` | budget per polish (LLM + images); over it, the product is handed back unchanged |
 | `IMAGE_PROVIDER` | `mock` or `openai` | `openai` | `openai` enables wall art + AI lifestyle mockups |
-| `IMAGE_MODEL` / `IMAGE_QUALITY` | `gpt-image-1.5` / `high` | same | wall art quality (~$0.20/image at high) |
+| `IMAGE_MODEL` / `IMAGE_EDIT_MODEL` | `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` | same | generation vs edits (photo mockups, Editor artwork edits); Sunburst keeps the input design exact, at ~2x the latency |
+| `IMAGE_QUALITY` | `high` | same | low / medium / high / xhigh / max; ~$0.05 per image at high on GPT Image 2.5, ~$0.21 at max |
 | `MOCKUP_SCENES` / `MOCKUP_QUALITY` | `true` / `medium` | same | backgrounds generated once per scene, then reused |
 | `VILLAGE_USER`, `VILLAGE_PASSWORD` | ✔ | ✔ | basic auth for the dashboard; without them the village returns 503 off-local |
 | `PRINT_USER`, `PRINT_PASSWORD` | ✔ | ✔ | login for the print shop's `/print` queue (sees only orders) |

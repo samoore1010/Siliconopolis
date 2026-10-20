@@ -54,6 +54,7 @@ def get_image_provider() -> ImageProvider:
         from .openai import OpenAIImageProvider
 
         return OpenAIImageProvider(api_key=settings.image_api_key, model=settings.image_model,
+                                   edit_model=settings.image_edit_model or settings.image_model,
                                    quality=settings.image_quality)
     raise NotImplementedError(
         f"IMAGE_PROVIDER={provider!r} is not implemented yet. Supported: mock, openai. "

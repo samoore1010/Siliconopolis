@@ -179,3 +179,27 @@ def test_extract_html_strips_stray_fences():
     assert render.extract_html(f"```html\n{doc}\n```") == doc
     assert render.extract_html(f"```html\n{doc}") == doc  # unterminated fence used to print "```html" on the page
     assert render.extract_html(f"Here is the design:\n{doc}\n```") == doc
+
+
+def test_openai_edits_use_the_edit_model_and_2_5_pricing(monkeypatch):
+    from pipeline.adapters.images.openai import OpenAIImageProvider, estimate_cost
+
+    sent = []
+
+    class Resp:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {"data": [{"b64_json": base64.b64encode(_png()).decode()}]}
+
+    prov = OpenAIImageProvider(api_key="sk-test", model="gpt-image-2.5-flare", edit_model="gpt-image-2.5-sunburst", quality="high")
+    monkeypatch.setattr(prov._http, "post", lambda path, **kw: sent.append((path, kw)) or Resp())
+    prov.generate("a fern")
+    prov.edit("restage as a photo", _png())
+    assert sent[0][1]["json"]["model"] == "gpt-image-2.5-flare" and sent[1][1]["data"]["model"] == "gpt-image-2.5-sunburst"
+    assert estimate_cost("gpt-image-2.5-sunburst", "high", "1024x1024") == 0.053
+    assert estimate_cost("gpt-image-2.5-flare", "max", "1024x1536") == round(0.211 * 1.5, 4)
+    assert estimate_cost("gpt-image-2.5-sunburst-2026-09-08", "low", "1024x1024") == 0.006  # dated snapshot ids
+    assert estimate_cost("gpt-image-1.5", "xhigh", "1024x1024") == 0.133  # unknown tier falls back to high

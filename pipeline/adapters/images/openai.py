@@ -17,9 +17,15 @@ log = get_logger(__name__)
 API = "https://api.openai.com/v1"
 
 # Approximate USD per image (1024x1024) by model/quality; non-square sizes cost ~1.5x.
+# GPT Image 2 / 2.5 bill per output token ($30/M): low ~196 tokens, high ~1,756, max ~7,024;
+# medium and xhigh are interpolated. Flare and Sunburst share one rate card (Sunburst is slower).
 # TODO(owner): confirm against https://openai.com/api/pricing when prices change.
+_V2 = {"low": 0.006, "medium": 0.02, "high": 0.053, "xhigh": 0.11, "max": 0.211}
 PRICES = {
-    "gpt-image-1.5": {"low": 0.009, "medium": 0.034, "high": 0.133},
+    "gpt-image-2.5-sunburst": _V2,
+    "gpt-image-2.5-flare": _V2,
+    "gpt-image-2": _V2,
+    "gpt-image-1.5": {"low": 0.009, "medium": 0.034, "high": 0.133, "xhigh": 0.133, "max": 0.133},
     "gpt-image-1-mini": {"low": 0.005, "medium": 0.011, "high": 0.036},
     "gpt-image-1": {"low": 0.011, "medium": 0.042, "high": 0.167},
 }
@@ -34,18 +40,20 @@ def pick_size(size: tuple[int, int]) -> str:
 
 
 def estimate_cost(model: str, quality: str, size: str) -> float:
-    table = PRICES.get(model) or PRICES["gpt-image-1.5"]
-    base = table.get(quality, table["medium"])
+    table = PRICES.get(model) or next((v for k, v in PRICES.items() if model.startswith(k)), None) or PRICES["gpt-image-1.5"]
+    base = table.get(quality) or table.get("high") or table["medium"]
     return round(base * (1.0 if size == SIZES["square"] else 1.5), 4)
 
 
 class OpenAIImageProvider(ImageProvider):
     name = "openai"
 
-    def __init__(self, *, api_key: str, model: str = "gpt-image-1.5", quality: str = "high", timeout: float = 180):
+    def __init__(self, *, api_key: str, model: str = "gpt-image-1.5", quality: str = "high", timeout: float = 180,
+                 edit_model: str | None = None):
         if not api_key:
             raise RuntimeError("IMAGE_API_KEY (an OpenAI API key) is required for IMAGE_PROVIDER=openai")
         self.model, self.quality = model, quality
+        self.edit_model = edit_model or model  # edits need fidelity to the input; generation needs speed
         self._http = httpx.Client(base_url=API, timeout=timeout,
                                   headers={"Authorization": f"Bearer {api_key}"})
 
@@ -74,7 +82,7 @@ class OpenAIImageProvider(ImageProvider):
         """images/edits: keeps the input (our exact product mockup) and restages it as a photo."""
         q = quality or self.quality
         api_size = pick_size(size)
-        data = {"model": self.model, "prompt": prompt[:30000], "size": api_size, "quality": q, "n": "1",
+        data = {"model": self.edit_model, "prompt": prompt[:30000], "size": api_size, "quality": q, "n": "1",
                 "input_fidelity": "high"}
         files = {"image[]": ("mockup.png", image, "image/png")}
         resp = self._http.post("/images/edits", data=data, files=files)
@@ -85,9 +93,9 @@ class OpenAIImageProvider(ImageProvider):
             raise RuntimeError(f"OpenAI image edit failed: {resp.status_code} {resp.text[:300]}")
         out = base64.b64decode(resp.json()["data"][0]["b64_json"])
         w, h = (int(x) for x in api_size.split("x"))
-        cost = round(estimate_cost(self.model, q, api_size) * 1.3, 4)  # input image tokens on top
-        log.info("image edited", model=self.model, size=api_size, quality=q, cost_usd=cost)
-        return GeneratedImage(data=out, media_type="image/png", width=w, height=h, cost_usd=cost, model=self.model,
+        cost = round(estimate_cost(self.edit_model, q, api_size) * 1.3, 4)  # input image tokens on top
+        log.info("image edited", model=self.edit_model, size=api_size, quality=q, cost_usd=cost)
+        return GeneratedImage(data=out, media_type="image/png", width=w, height=h, cost_usd=cost, model=self.edit_model,
                               metadata={"prompt": prompt, "quality": q, "edit": True})
 
     def ping(self) -> None:

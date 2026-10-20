@@ -79,10 +79,13 @@ class Settings(BaseSettings):
     image_provider: str = Field("mock", alias="IMAGE_PROVIDER")
     image_api_key: str = Field("", alias="IMAGE_API_KEY")
     image_model: str = Field("gpt-image-1.5", alias="IMAGE_MODEL")
-    image_quality: Literal["low", "medium", "high"] = Field("high", alias="IMAGE_QUALITY")
+    # IMAGE_EDIT_MODEL: the model for image EDITS (restaging a print as a photo, the Editor's artwork
+    # edits), where preserving the exact design matters; empty = same as IMAGE_MODEL
+    image_edit_model: str = Field("", alias="IMAGE_EDIT_MODEL")
+    image_quality: Literal["low", "medium", "high", "xhigh", "max"] = Field("high", alias="IMAGE_QUALITY")
     # lifestyle mockup backgrounds (cached and reused, so this is a one-off cost per scene)
     mockup_scenes: bool = Field(True, alias="MOCKUP_SCENES")
-    mockup_quality: Literal["low", "medium", "high"] = Field("medium", alias="MOCKUP_QUALITY")
+    mockup_quality: Literal["low", "medium", "high", "xhigh", "max"] = Field("medium", alias="MOCKUP_QUALITY")
 
     # QA bars (1-10): every score must reach QA_MIN_SCORE; design_polish and commercial_viability must
     # reach QA_MIN_COMMERCIAL_SCORE. 8 = "would list as-is"; 7 = "minor polish away"; start at 7.

@@ -108,8 +108,10 @@ def village_outbox():
         for p in rows:
             listing = p.listing_json or {}
             url = listing.get("etsy_url")
-            if not url and p.etsy_listing_id and settings.adapter_mode("etsy") == "live":
-                url = f"https://www.etsy.com/your/shops/me/tools/listings/{p.etsy_listing_id}"
+            if p.etsy_listing_id and p.etsy_listing_id != "dry-run" and settings.adapter_mode("etsy") == "live":
+                from pipeline.adapters.etsy.live import manage_url
+
+                url = manage_url(p.etsy_listing_id)  # drafts have no public page
             drafts.append({**product_summary(p), "url": url, "price": listing.get("price"), "dry_run": listing.get("dry_run", False),
                            "mock": settings.adapter_mode("etsy") == "mock"})
         return {"drafts": drafts, "mock_shop_state": "mock_etsy/shop_state.json" if settings.adapter_mode("etsy") == "mock" else None}
