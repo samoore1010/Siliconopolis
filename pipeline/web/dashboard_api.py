@@ -153,15 +153,48 @@ def _round_now(brief: dict, state: str) -> dict[str, Any]:
             "rounds_rejected": sum(1 for h in history if not h.get("pass"))}
 
 
+def _physical(p: Product) -> dict[str, Any] | None:
+    """What the buyer gets and what it costs us, for shirts/mugs: blank, material, sizes, colours, margin."""
+    if p.product_type not in ProductType.PHYSICAL:
+        return None
+    from pipeline.catalog import get_catalog
+
+    plan = (p.brief_json or {}).get("creator_plan") or {}
+    spec = plan.get("merch_spec") or {}
+    item = get_catalog().get(spec.get("item") or (plan.get("merch") or {}).get("item") or (p.brief_json or {}).get("item"))
+    if item is None:
+        return {"item": None, "label": "Not chosen yet", "colors": [], "sizes": [], "personalization": []}
+    offered = [c for c in spec.get("colors") or [] if c in item.colors] or list(item.colors)
+    pers = spec.get("personalization") or {}
+    price = float((p.listing_json or {}).get("price") or item.price)
+    return {
+        "item": item.key, "label": item.label, "blank": item.blank, "material": item.material, "method": item.method,
+        "print_area": f"{item.print_area['name']} {item.print_area['width_in']} x {item.print_area['height_in']} in",
+        "sizes": [{"size": s, "price": item.price_for(s)} for s in item.sizes],
+        "colors": [{"name": c, "hex": item.colors[c], "offered": c in offered} for c in item.colors],
+        "personalization": [{"label": f.get("label") or f.get("key"), "max_chars": f.get("max_chars"), "example": f.get("example")}
+                            for f in (pers.get("fields") or []) if isinstance(f, dict)] if pers.get("enabled") else [],
+        "instructions": pers.get("instructions"),
+        "price": price, "unit_cost": item.unit_cost, "ship_cost": item.ship_cost,
+        "margin": round(price - item.unit_cost, 2),  # per sale, before Etsy fees; postage is charged to the buyer
+        "processing_days": get_catalog().processing_days,
+    }
+
+
 def _card(p: Product) -> dict[str, Any]:
     brief = p.brief_json or {}
     qa = p.qa_result_json or {}
     reasons = qa.get("reasons") or []
+    phys = _physical(p)
     return {
         "round": _round_now(brief, p.state),
+        "physical": bool(phys),
+        "merch": {"label": phys["label"], "margin": phys.get("margin"), "price": phys.get("price"),
+                  "colors": sum(1 for c in phys["colors"] if c["offered"]), "sizes": len(phys["sizes"]),
+                  "personalized": bool(phys["personalization"])} if phys else None,
         **product_summary(p), "title": _title(p)[:120], "stage": STATE_LABEL.get(p.state, p.state),
         "type_label": TYPE_LABEL.get(p.product_type, p.product_type),
-        "price": (p.listing_json or {}).get("price") or brief.get("target_price_usd"),
+        "price": phys["price"] if phys and phys.get("item") else ((p.listing_json or {}).get("price") or brief.get("target_price_usd")),
         "thumb": f"/api/village/image/{p.id}/0?w=480" if p.image_paths else None,
         "one_liner": str(brief.get("rationale") or brief.get("concept") or "")[:220],
         "verdict": None if not qa else ("passed" if qa.get("pass") else "failed"),
@@ -400,6 +433,7 @@ def product(product_id: int):
                    "listing_notes": qa.get("listing_notes") or [], "requested_changes": qa.get("requested_changes") or [],
                    "reviewed": qa.get("reviewed")} if qa else None,
             "rounds": _rounds(full),
+            "physical_details": _physical(p),
             "file_check": plan.get("file_check"),
             "comments": [_note(n) for n in notes],
             "revision_pending": bool(full.get("revision")),

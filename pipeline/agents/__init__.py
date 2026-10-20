@@ -35,5 +35,7 @@ def get_agent(name: str) -> Agent:
 
 
 def prompt_file_for(name: str) -> str:
-    """The prompts/*.md file an agent uses (without instantiating it)."""
-    return f"prompts/{registry()[name].prompt_file}.md"
+    """The prompts/*.md file(s) an agent uses (without instantiating it)."""
+    cls = registry()[name]
+    files = getattr(cls, "prompt_files", None) or (cls.prompt_file,)
+    return ", ".join(f"prompts/{f}.md" for f in files)

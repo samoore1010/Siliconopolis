@@ -149,8 +149,10 @@ See [`.env.example`](.env.example) for the full list. Key ones:
 | `RAILWAY_API_TOKEN`, `RAILWAY_SERVICE_IDS` | legacy "Run now" through Railway cron services, only when the worker is off |
 | `PRINT_USER`, `PRINT_PASSWORD`, `ETSY_SHIPPING_PROFILE_ID`, `ETSY_PRODUCTION_PARTNER_ID` | in-house merch: the print shop's login and Etsy ids (see `DEPLOY.md`) |
 
-Other config files: `niches.yaml` (seeded with three placeholder niches), `blocklist.txt` (IP safety
-terms), `prompts/*.md` (one prompt per agent, editable without code changes).
+Other config files: `niches.yaml` (seeded with three placeholder niches), `catalog.yaml` (the blanks the
+print shop can make: material, sizes, colours, print area, cost, price), `blocklist.txt` (IP safety terms),
+`prompts/*.md` (editable without code changes; the Creator and Editor each have a digital and a physical
+prompt, picked by product type).
 
 ## Guardrails
 

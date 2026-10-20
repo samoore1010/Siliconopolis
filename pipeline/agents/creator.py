@@ -65,7 +65,13 @@ def revision_note(brief: dict) -> str:
 
 class CreatorAgent(Agent):
     name = "creator"
-    prompt_file = "creator"
+    # digital products (files) and physical ones (printed blanks) are briefed differently
+    prompt_file = "creator_digital"
+    prompt_files = ("creator_digital", "creator_physical")
+
+    @classmethod
+    def prompt_for(cls, product_type: str) -> str:
+        return cls.prompt_files[1] if product_type in ProductType.PHYSICAL else cls.prompt_files[0]
 
     DEFAULT_BATCH = 10  # ideas built per daily run
 
@@ -439,7 +445,7 @@ class CreatorAgent(Agent):
             user += f"\n\nCatalog items you may use for this product (`merch_spec.item`):\n{json.dumps(items, indent=1)}"
         try:
             plan, result = self.ask_json(session, task="creator_plan", model=self.settings.model_worker, user=user,
-                                         max_tokens=16000)
+                                         max_tokens=16000, prompt=self.prompt_for(product.product_type))
         except LLMError as e:
             raise RuntimeError(f"creator plan was not valid JSON: {e}") from e
         if isinstance(plan, list):  # model occasionally wraps the object in a list
