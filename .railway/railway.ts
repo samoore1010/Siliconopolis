@@ -43,6 +43,8 @@ export default defineRailway((ctx) => {
     MODEL_RESEARCH: "claude-opus-5-5",
     MODEL_WORKER: "claude-sonnet-5-5",
     MODEL_CHEAP: "claude-haiku-5-5",
+    MODEL_EDITOR: "claude-opus-5-5", // the Editor polishes with a stronger model than the Creator
+    EDITOR_MAX_COST_PER_PRODUCT_USD: prod ? "3" : "1",
 
     DATABASE_URL: db.env.DATABASE_URL,
 
@@ -122,8 +124,17 @@ export default defineRailway((ctx) => {
     env,
   });
 
+  // Hourly at :30: polish the products the owner sent to the Editor. Its own service, so a polish
+  // never waits behind the daily build; exits at once when the polish queue is empty.
+  const editor = service("editor", {
+    source,
+    start: "python -m pipeline run editor",
+    deploy: { cronSchedule: "30 * * * *", restartPolicyType: "NEVER" },
+    env,
+  });
+
   const data = group("Data", [db, storage]);
-  const agents = group("Agents", [researcher, daily, analyst, fulfiller]);
+  const agents = group("Agents", [researcher, daily, editor, analyst, fulfiller]);
 
   return project("etsy-agent-pipeline", {
     resources: [data, web, agents],

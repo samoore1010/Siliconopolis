@@ -11,6 +11,7 @@ One Railway project, two environments (`staging`, `production`). Each environmen
 | `daily-pipeline` | cron | `python -m pipeline run daily` — `0 14 * * *` (7:00 AM Phoenix) |
 | `analyst` | cron | `python -m pipeline run analyst` — `0 3 * * 1` (Sun 8:00 PM Phoenix) |
 | `fulfiller` | cron | `python -m pipeline run fulfiller` — `0 * * * *` (hourly: shirt/mug orders → print queue, tracking → Etsy) |
+| `editor` | cron | `python -m pipeline run editor` — `30 * * * *` (hourly: polishes the products you sent to the Editor; exits at once when there are none) |
 
 All services build from the same `Dockerfile`; only the start command differs. Cron services run to
 completion and exit (nonzero on failure, `3` when a cap is hit) and close their DB pool on exit, as
@@ -28,7 +29,7 @@ make overlapping or manual "run now" executions safe anyway.
 If you created the project by pointing Railway at the repo (one service, no database), you have the
 web service only. It serves `/` and `/health`, but agents cannot run and nothing persists:
 `APP_ENV=local` with SQLite is wiped on every redeploy. To finish the setup, either run Section A
-(IaC adds Postgres, the bucket and the three cron services next to your existing service — rename
+(IaC adds Postgres, the bucket and the cron services next to your existing service — rename
 the existing service to `web` first so the plan updates it instead of creating a second one) or
 follow Section B steps 2–7 in the dashboard. Then set `APP_ENV=staging` or `production`.
 
@@ -46,7 +47,7 @@ railway init                     # create project "etsy-agent-pipeline" (or rail
 railway environment new staging  # production exists by default; create staging
 railway environment staging      # select it
 npm install railway
-railway config plan              # review: +postgres, +storage bucket, +web, +researcher, +daily-pipeline, +analyst
+railway config plan              # review: +postgres, +storage bucket, +web, +researcher, +daily-pipeline, +editor, +analyst, +fulfiller
 railway config apply
 ```
 
@@ -74,8 +75,9 @@ production.
 2. **Add Postgres**: Create → Database → PostgreSQL. It exposes `DATABASE_URL`.
 3. **Add Bucket**: Create → Bucket, name `storage`, choose a region. Its Credentials tab shows
    `ENDPOINT`, `BUCKET`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`, `REGION`.
-4. **Create four services from the GitHub repo** (Create → GitHub Repo), named `web`,
-   `researcher`, `daily-pipeline`, `analyst`. Railway detects the Dockerfile automatically.
+4. **Create six services from the GitHub repo** (Create → GitHub Repo), named `web`,
+   `researcher`, `daily-pipeline`, `editor`, `analyst`, `fulfiller`. Railway detects the Dockerfile
+   automatically.
 5. Per service → Settings:
    - **Start command** as in the table above.
    - `web`: **Pre-deploy command** `alembic upgrade head`; **Healthcheck path** `/health`;
@@ -116,6 +118,8 @@ production.
 | `STORAGE_BACKEND` | `s3` | `s3` | |
 | `S3_*` | bucket references | same | see Section B.6 |
 | `MODEL_RESEARCH` / `MODEL_WORKER` / `MODEL_CHEAP` | `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-haiku-5-5` | same | |
+| `MODEL_EDITOR` | `claude-opus-5-5` | same | the Editor's model; stronger than the Creator's by design |
+| `EDITOR_MAX_COST_PER_PRODUCT_USD` | `1` | `3` | budget per polish (LLM + images); over it, the product is handed back unchanged |
 | `IMAGE_PROVIDER` | `mock` or `openai` | `openai` | `openai` enables wall art + AI lifestyle mockups |
 | `IMAGE_MODEL` / `IMAGE_QUALITY` | `gpt-image-1.5` / `high` | same | wall art quality (~$0.20/image at high) |
 | `MOCKUP_SCENES` / `MOCKUP_QUALITY` | `true` / `medium` | same | backgrounds generated once per scene, then reused |
@@ -180,8 +184,9 @@ Each agent panel has a Run-now button that asks Railway to re-run the agent's cr
 disabled until the `web` service has:
 
 - `RAILWAY_API_TOKEN` — a Railway project or account token with access to this project.
-- `RAILWAY_SERVICE_IDS` — JSON mapping `{"researcher": "<serviceId>", "daily": "<serviceId>", "analyst": "<serviceId>"}`
-  (Creator, QA and Lister all map to `daily`). Service ids are in each service's Settings page.
+- `RAILWAY_SERVICE_IDS` — JSON mapping `{"researcher": "<serviceId>", "daily": "<serviceId>", "editor": "<serviceId>",
+  "analyst": "<serviceId>", "fulfiller": "<serviceId>"}` (Creator, QA and Lister all map to `daily`). Service
+  ids are in each service's Settings page.
 - `RAILWAY_ENVIRONMENT_ID` — injected by Railway automatically.
 
 The button only starts a normal run, so caps, locks and the draft-only rule apply exactly as on a
@@ -189,7 +194,23 @@ schedule. The GraphQL mutation used (`serviceInstanceRedeploy`) is marked `TODO(
 against Railway's current API before relying on it.
 
 
-## I. In-house shirts, sweatshirts, hoodies and mugs (family print shop)
+## I. The Editor (polishing existing products)
+
+Nothing reaches the Editor on its own. On any built, approved or rejected product (never an Etsy
+draft or a live listing) choose **Polish it** in the app, optionally with a note; QA's improvement
+suggestions go along with it. The Editor starts from the product's current design (page HTML,
+spreadsheet spec, print design or artwork), applies every requested change, keeps the rest, raises
+the finish, re-runs the same layout/formula checks, and hands the result back to QA, which checks
+each requested change was actually made. The version it started from is kept for comparison.
+
+- Separate cron service (`editor`, hourly at :30) so polishes never wait behind the daily build.
+  Add it like the other crons (Section A does it; Section B: one more service with that schedule).
+- `MODEL_EDITOR` (default `claude-opus-5-5`) and `EDITOR_MAX_COST_PER_PRODUCT_USD` (default 3) cap
+  quality and cost; the daily `MAX_DAILY_SPEND_USD` still applies on top.
+- The polish queue is at Products → *Polish queue*: reorder it, take a product back before the
+  Editor starts, or press Stop while it is running (it finishes the product in hand).
+
+## J. In-house shirts, sweatshirts, hoodies and mugs (family print shop)
 
 1. **Catalog.** Edit `catalog.yaml`: blanks, colours (name → hex), sizes, print area, the shop's
    cost per item (`unit_cost`), postage estimate and price. The agents only design what is listed.

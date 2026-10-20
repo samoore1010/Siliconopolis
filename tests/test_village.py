@@ -113,13 +113,14 @@ def test_village_endpoints_open_in_local_without_auth(client, brief_factory):
     main(["run", "creator"])
     assert client.get("/village").status_code == 200 and "<canvas" in client.get("/village").text
     s = client.get("/api/village/state").json()
-    assert s["queue"]["created"] == 1 and len(s["agents"]) == 6 and s["env"]["mode"] == "mock"
+    assert s["queue"]["created"] == 1 and len(s["agents"]) == 7 and s["env"]["mode"] == "mock"
     assert s["run_now_enabled"] is False
     ev = client.get("/api/village/events").json()
     assert ev["events"] and ev["last_id"] == s["last_event_id"]
     assert client.get(f"/api/village/events?since={ev['last_id']}").json()["events"] == []
     a = client.get("/api/village/agent/creator").json()
     assert a["prompt_file"] == "prompts/creator.md" and a["runs"][0]["items"] == 1 and a["run_now_available"] is False
+    assert client.get("/api/village/agent/fulfiller").json()["prompt_file"] == "prompts/order_check.md"
     assert client.get("/api/village/agent/nope").status_code == 404
     p = client.get("/api/village/product/1").json()
     assert p["state"] == "created" and len(p["images"]) == 4 and p["history"]
@@ -161,9 +162,10 @@ def test_auth_refuses_unconfigured_hosted_env(client, monkeypatch):
 
 
 def test_run_now_disabled_without_railway_token(client):
-    r = client.post("/api/village/run/creator")
+    assert client.post("/api/village/run/creator").status_code == 403  # no CSRF header
+    r = client.post("/api/village/run/creator", headers={"X-Siliconopolis": "1"})
     assert r.status_code == 403
-    assert client.post("/api/village/run/nope").status_code == 404
+    assert client.post("/api/village/run/nope", headers={"X-Siliconopolis": "1"}).status_code == 404
 
 
 def test_no_village_route_can_publish(client):

@@ -274,6 +274,21 @@ class MockLLM(LLMClient):
                     "<div class='page'><h1>Today's One Thing</h1><div class='box'></div><footer>Mock planner</footer></div>"
                     "<div class='page'><h1>Weekly Habits</h1><div class='row'>" + "<span class='c'></span>" * 7 +
                     "</div><footer>Mock planner</footer></div></body></html>\n```")
+        if task in ("editor_pages", "editor_merch"):
+            base = MockLLM._canned("creator_page_html" if task == "editor_pages" else "creator_merch_html", user)
+            html = base.replace("Mock planner", "Polished planner").replace("FAMILY REUNION", "FAMILY REUNION 2026")
+            meta = {"changes_made": ["Applied the owner's note", "Tightened spacing and hierarchy"],
+                    "kept": ["Page structure and palette"], "title_hint": None, "palette": None}
+            return "```json\n" + json.dumps(meta) + "\n```\n" + html
+        if task == "editor_sheet":
+            spec = _mock_sheet_spec("Polished Workbook")
+            return {"changes_made": ["Renamed the workbook", "Added clearer instructions"], "kept": ["All tabs"],
+                    "spreadsheet_spec": spec}
+        if task == "editor_art":
+            return {"changes_made": ["Warmed the palette"], "kept": ["Composition"],
+                    "image_prompt": (_grab(user, r"Current image prompt: ([^\n]+)") or "original composition") + "; warmer tones",
+                    "negative_prompt": "text, watermark, logo", "edit_prompt": "warm the palette, keep the composition",
+                    "regenerate": False}
         if task == "qa_vision":
             return {
                 "pass": True,
@@ -281,6 +296,9 @@ class MockLLM(LLMClient):
                            "design_polish": 8, "commercial_viability": 8},
                 "verdict": "Mock QA: would hold its own against typical listings at this price.",
                 "improvements": [],
+                "requested_changes": [{"change": c.strip()[:120], "done": True}
+                                      for c in re.findall(r"^- (.+)$", user.split("REQUESTED CHANGES", 1)[1], re.M)]
+                if "REQUESTED CHANGES" in user else [],
                 "ip_concerns": [],
                 "reasons": ["Mock QA: placeholder images render, no text artifacts, matches brief."],
             }

@@ -20,7 +20,7 @@ const GRID = 10;
 /* ---------------------------------------------------------------- palette & sprites (original) */
 const PAL = {
   ".": null, k: "#1b1b24", w: "#f3efe6", s: "#f0c8a0", S: "#c9956a", h: "#3b2a22", H: "#d9b36b", g: "#6d6d7a",
-  a: "#7cc4ff", b: "#6fd38a", c: "#f3c34f", d: "#ff8fa3", e: "#b48cff", o: "#2a2f3f", O: "#3a4157",
+  a: "#7cc4ff", b: "#6fd38a", c: "#f3c34f", d: "#ff8fa3", e: "#b48cff", t: "#5fd6d0", o: "#2a2f3f", O: "#3a4157",
 };
 // 12x16 character; letters: k outline, s skin, h hair, X shirt (replaced per agent), w eyes, o pants
 const BODY = [
@@ -45,6 +45,7 @@ const BODY_TYPING = BODY.map((r, i) => (i === 7 ? "..XXXXXXXX.." : i === 8 ? ".s
 const AGENTS = {
   researcher: { shirt: "a", hair: "#3b2a22", label: "Researcher", gx: 0.8, gy: 0.8, color: "#7cc4ff" },
   creator:    { shirt: "d", hair: "#8a4b2a", label: "Creator",    gx: 6.5, gy: 0.6, color: "#ff8fa3" },
+  editor:     { shirt: "t", hair: "#2b2b2b", label: "Editor",     gx: 0.9, gy: 3.5, color: "#5fd6d0" },
   qa:         { shirt: "c", hair: "#1b1b24", label: "QA",         gx: 8.6, gy: 4.4, color: "#f3c34f" },
   lister:     { shirt: "b", hair: "#d9b36b", label: "Lister",     gx: 6.3, gy: 7.6, color: "#6fd38a" },
   analyst:    { shirt: "e", hair: "#5a3d6b", label: "Analyst",    gx: 0.6, gy: 6.0, color: "#b48cff" },
@@ -53,7 +54,7 @@ const AGENTS = {
 const BRAIN = { gx: 4.6, gy: 4.6 };
 const OUTBOX = { gx: 8.8, gy: 7.6 };
 const BIN = { gx: 9.2, gy: 2.0 };
-const ORDER = ["researcher", "creator", "qa", "lister", "analyst", "fulfiller"];
+const ORDER = ["researcher", "creator", "editor", "qa", "lister", "analyst", "fulfiller"];
 
 function drawSprite(rows, x, y, scale, overrides) {
   for (let r = 0; r < rows.length; r++) for (let c = 0; c < rows[r].length; c++) {
@@ -221,10 +222,13 @@ async function getJSON(url) { const r = await fetch(url, { headers: { accept: "a
 
 function routeForEvent(ev) {
   const m = { "brief>created": ["researcher", "creator"], "created>approved": ["creator", "qa"], "created>rejected": ["qa", "bin"],
-              "approved>drafted": ["qa", "lister"], "approved>rejected": ["lister", "bin"], "drafted>published": ["lister", "outbox"] };
+              "approved>drafted": ["qa", "lister"], "approved>rejected": ["lister", "bin"], "drafted>published": ["lister", "outbox"],
+              "editing>created": ["editor", "qa"] };
   if (ev.kind === "transition") {
     const r = m[`${ev.from_state}>${ev.to_state}`]; if (r) return r;
     if (ev.to_state === "brief") return ["brain", "researcher"];
+    if (ev.to_state === "editing") return ["brain", "editor"];
+    if (ev.from_state === "editing") return ["editor", "brain"];
   }
   if (ev.kind === "run_finished" && ev.agent === "lister") return ["lister", "outbox"];
   if (ev.kind === "run_finished" && ev.agent === "analyst") return ["analyst", "researcher"];
@@ -252,7 +256,7 @@ function renderSidebar() {
   setBar("spend", spendPct, `$${c.spend_today.toFixed(2)} / $${c.max_daily_spend_usd}`);
   setBar("draft", draftPct, `${c.drafts_today} / ${c.daily_draft_cap}`);
   setBar("brief", briefPct, `${c.briefs_this_week} / ${c.weekly_brief_cap}`);
-  $("queue").innerHTML = ["brief", "created", "approved", "rejected", "drafted", "published"].map((k) => `<div class="q"><b>${state.queue[k] ?? 0}</b><span>${k}</span></div>`).join("");
+  $("queue").innerHTML = ["brief", "created", "editing", "approved", "rejected", "drafted", "published"].map((k) => `<div class="q"><b>${state.queue[k] ?? 0}</b><span>${k}</span></div>`).join("");
   $("badges").innerHTML = [
     `<span class="badge ${env.app_env === "production" ? "bad" : env.app_env === "staging" ? "warn" : ""}">${env.app_env}</span>`,
     `<span class="badge ${env.mode === "live" ? "warn" : "on"}">mode: ${env.mode}</span>`,
@@ -307,7 +311,7 @@ async function openAgent(name) {
     <button class="btn" id="run-now" ${a.run_now_available ? "" : "disabled"}>Run ${esc(a.title)} now</button>
     <p class="note">${a.run_now_available ? "Triggers the Railway cron service; caps, locks and draft-only apply as usual." : "Disabled: set RAILWAY_API_TOKEN and RAILWAY_SERVICE_IDS on the web service. No button can ever publish a listing."}</p>
     <h4>Recent runs</h4><ul class="list">${runs}</ul>`);
-  const btn = $("run-now"); if (btn && !btn.disabled) btn.onclick = async () => { btn.disabled = true; btn.textContent = "triggering…"; try { const r = await fetch(`/api/village/run/${name}`, { method: "POST" }); btn.textContent = r.ok ? "triggered ✓" : `failed (${r.status})`; } catch { btn.textContent = "failed"; } };
+  const btn = $("run-now"); if (btn && !btn.disabled) btn.onclick = async () => { btn.disabled = true; btn.textContent = "triggering…"; try { const r = await fetch(`/api/village/run/${name}`, { method: "POST", headers: { "X-Siliconopolis": "1" } }); btn.textContent = r.ok ? "triggered ✓" : `failed (${r.status})`; } catch { btn.textContent = "failed"; } };
 }
 async function openProduct(id) {
   const p = await getJSON(`/api/village/product/${id}`);
@@ -338,6 +342,7 @@ function openBrain() {
   const q = state.queue;
   openPanel("The Brain — products queue", `<p class="note">Agents never talk to each other directly; every hand-off is a row in the <code>products</code> table changing state.</p>
     ${kv(q)}<h4>Pipeline</h4><pre>brief → created → approved | rejected
+created | approved | rejected → editing (you send it to the Editor) → created → QA again
 approved → drafted (Etsy draft) → published (by you) → retired</pre>`);
 }
 })();

@@ -45,7 +45,8 @@ MAX_CREATE_ATTEMPTS = 2  # after this many failed creations a brief is rejected 
 MAX_SHEET_FIXES = 2
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # brief keys that are bookkeeping, not part of the product idea
-INTERNAL_KEYS = ("create_attempts", "last_create_error", "creator_plan", "revision", "revisions_done")
+INTERNAL_KEYS = ("create_attempts", "last_create_error", "creator_plan", "revision", "revisions_done",
+                 "edit", "edits_done", "last_edit_error")
 
 
 def revision_note(brief: dict) -> str:
@@ -104,6 +105,12 @@ class CreatorAgent(Agent):
                 self.note_error(f"creator failed for product {product.id} (attempt {attempts}): {e}", product_id=product.id)
                 if attempts >= MAX_CREATE_ATTEMPTS:
                     product.qa_result_json = {"pass": False, "reasons": [f"creation failed {attempts}x: {str(e)[:300]}"]}
+                    brief = dict(product.brief_json)
+                    if brief.get("revision"):  # otherwise the dashboard shows "your changes are being made" forever
+                        rev = {k: v for k, v in brief.pop("revision").items() if k != "previous_plan"}
+                        brief["revisions_done"] = list(brief.get("revisions_done") or []) + [
+                            {**rev, "failed": True, "completed_run": self.run_id}]
+                        product.brief_json = brief
                     transition(session, product, ProductState.REJECTED, message=f"creation failed {attempts}x")
                 else:
                     release(session, product)
@@ -115,6 +122,14 @@ class CreatorAgent(Agent):
     @property
     def _is_mock_run(self) -> bool:
         return self.settings.mode == "mock" and self.settings.app_env == "local"
+
+    @property
+    def design_model(self) -> str:
+        """Model used for designing pages/prints and for the fix rounds (the Editor uses a stronger one)."""
+        return self.settings.model_worker
+
+    def _spend_check(self, product: Product) -> None:
+        """Hook for per-product budgets (the Editor caps what one polish may cost)."""
 
     def _scene(self, session, storage, images, kind: str, key: int, product: Product) -> bytes | None:
         """Cached AI lifestyle background (generated once per variant, then reused across products)."""
@@ -143,10 +158,13 @@ class CreatorAgent(Agent):
         user = (f"Design brief:\n{json.dumps(spec, indent=2)}\n\nPalette (background, ink, accent): {palette}\n"
                 f"Audience: {brief.get('audience')}\nStyle: {brief.get('style')}\n"
                 f"Orientation: {'landscape' if landscape else 'portrait'}\nProduct title: {plan.get('title_hint')}{note}")
-        result = self.ask(session, task="creator_page_html", model=self.settings.model_worker, user=user,
+        result = self.ask(session, task="creator_page_html", model=self.design_model, user=user,
                           max_tokens=16000, prompt="creator_page")
         product.add_cost(result.cost_usd)
-        html = render.extract_html(result.text)
+        return self._ensure_layout(session, product, render.extract_html(result.text), user, landscape)
+
+    def _ensure_layout(self, session, product: Product, html: str, user: str, landscape: bool) -> str:
+        """Check the page layout at Letter and A4; send problems back to the model (up to MAX_LAYOUT_FIXES)."""
         for attempt in range(MAX_LAYOUT_FIXES + 1):
             problems = []
             for size in ("letter", "a4"):
@@ -158,7 +176,8 @@ class CreatorAgent(Agent):
                           problems=problems[:5])
             if attempt == MAX_LAYOUT_FIXES:
                 break
-            fix = self.ask(session, task="creator_page_fix", model=self.settings.model_worker, max_tokens=16000,
+            self._spend_check(product)
+            fix = self.ask(session, task="creator_page_fix", model=self.design_model, max_tokens=16000,
                            prompt="creator_page",
                            user=(f"{user}\n\nYour previous HTML rendered with these layout problems:\n- "
                                  + "\n- ".join(problems[:12])
@@ -202,7 +221,8 @@ class CreatorAgent(Agent):
                           problems=problems[:5])
             if attempt == MAX_SHEET_FIXES:
                 break
-            fix = self.ask(session, task="creator_sheet_fix", model=self.settings.model_worker, max_tokens=16000,
+            self._spend_check(product)
+            fix = self.ask(session, task="creator_sheet_fix", model=self.design_model, max_tokens=16000,
                            user=(f"{context}\n\nYour spreadsheet_spec failed validation (cells are reported after a "
                                  "full recalculation, data rows start at row 4):\n- " + "\n- ".join(problems[:20]) +
                                  "\n\nReturn ONLY the corrected spreadsheet_spec JSON object (same schema). "
@@ -231,8 +251,9 @@ class CreatorAgent(Agent):
         self.record_cost(session, gen.cost_usd, kind="image")
         return gen.data
 
-    def _design_merch(self, session, product: Product, spec: dict, item, art_uri: str | None, note: str) -> tuple[str, render.PrintRender]:
-        """Claude designs the print as HTML/CSS; we render it at print resolution and send problems back."""
+    @staticmethod
+    def _merch_context(spec: dict, item, art_uri: str | None, note: str) -> tuple[str, dict, dict, dict]:
+        """The design brief text for a print, plus example/stress personalisation values and blank colours."""
         w, h = item.print_area["width_in"], item.print_area["height_in"]
         fields = (spec.get("personalization") or {}).get("fields") or []
         example = {str(f.get("key")): str(f.get("example") or f.get("label") or "Name") for f in fields if f.get("key")}
@@ -245,10 +266,21 @@ class CreatorAgent(Agent):
                 + ("\nMug: the wrap is seen from the front; keep the main design within the middle 40% of the width "
                    "(you may repeat a smaller motif on the far left/right)." if item.product_type == "mug" else "")
                 + note)
-        result = self.ask(session, task="creator_merch_html", model=self.settings.model_worker, user=user,
+        return user, example, stress, colors
+
+    def _design_merch(self, session, product: Product, spec: dict, item, art_uri: str | None, note: str) -> tuple[str, render.PrintRender]:
+        """Claude designs the print as HTML/CSS; we render it at print resolution and send problems back."""
+        user, example, stress, colors = self._merch_context(spec, item, art_uri, note)
+        result = self.ask(session, task="creator_merch_html", model=self.design_model, user=user,
                           max_tokens=12000, prompt="creator_merch")
         product.add_cost(result.cost_usd)
-        html = render.extract_html(result.text)
+        return self._ensure_print(session, product, render.extract_html(result.text), user, item, art_uri,
+                                  example, stress, colors)
+
+    def _ensure_print(self, session, product: Product, html: str, user: str, item, art_uri: str | None,
+                      example: dict, stress: dict, colors: dict) -> tuple[str, render.PrintRender]:
+        """Render the print at full resolution and with over-long names; send problems back to the model."""
+        w, h = item.print_area["width_in"], item.print_area["height_in"]
         problems: list[str] = []
         for attempt in range(MAX_LAYOUT_FIXES + 1):
             sample = render.render_print_file(html, width_in=w, height_in=h, dpi=get_catalog().min_dpi,
@@ -264,7 +296,8 @@ class CreatorAgent(Agent):
             self.log.info("merch design problems; asking for a fix", product_id=product.id, problems=problems[:5])
             if attempt == MAX_LAYOUT_FIXES:
                 break
-            fix = self.ask(session, task="creator_merch_fix", model=self.settings.model_worker, max_tokens=12000,
+            self._spend_check(product)
+            fix = self.ask(session, task="creator_merch_fix", model=self.design_model, max_tokens=12000,
                            prompt="creator_merch",
                            user=(f"{user}\n\nYour previous design rendered with these problems:\n- " + "\n- ".join(problems[:10])
                                  + f"\n\nFix every problem. Return the full corrected document.\n\n```html\n{html}\n```"))
@@ -303,7 +336,8 @@ class CreatorAgent(Agent):
 
     def _create_merch(self, session, product: Product, brief: dict, plan: dict, palette: list[str], title: str,
                       base: str, slug: str, storage, images, files: list[str], imgs: list[str], note: str,
-                      scene_key: int) -> dict:
+                      scene_key: int, html: str | None = None, art: bytes | None = None) -> dict:
+        """Design (or, given `html`, re-check) the print, then build the print file and listing images."""
         import base64
 
         catalog = get_catalog()
@@ -320,10 +354,15 @@ class CreatorAgent(Agent):
         fields = [f for f in pers.get("fields") or [] if isinstance(f, dict) and re.fullmatch(r"[a-z_][a-z0-9_]*", str(f.get("key", "")))]
         spec["personalization"] = {**pers, "enabled": bool(pers.get("enabled") and fields), "fields": fields[:3]}
 
-        art = self._merch_art(session, product, spec, images)
+        if html is None:
+            art = self._merch_art(session, product, spec, images)
         art_path = storage.put(f"{base}/source/art.png", art, "image/png") if art else None
         art_uri = f"data:image/png;base64,{base64.b64encode(art).decode()}" if art else None
-        html, sample = self._design_merch(session, product, spec, item, art_uri, note)
+        if html is None:
+            html, sample = self._design_merch(session, product, spec, item, art_uri, note)
+        else:
+            user, example, stress, colors = self._merch_context(spec, item, art_uri, note)
+            html, sample = self._ensure_print(session, product, html, user, item, art_uri, example, stress, colors)
         hits = get_blocklist().check_many(re.sub(r"<[^>]+>", " ", html))
         if hits:
             raise RuntimeError(f"blocklist hit in design text: {hits}")
@@ -364,13 +403,32 @@ class CreatorAgent(Agent):
                 str(f["key"]): str(f.get("example") or "") for f in spec["personalization"]["fields"]}}}
 
     # ------------------------------------------------------------------ main
+    @staticmethod
+    def open_comments(session, product: Product) -> list[OwnerNote]:
+        """Plain owner notes on this product that no build has used yet."""
+        return session.execute(select(OwnerNote).where(
+            OwnerNote.product_id == product.id, OwnerNote.kind == OwnerNoteKind.COMMENT,
+            OwnerNote.status.is_(None))).scalars().all()
+
+    @staticmethod
+    def slug_of(plan: dict, product: Product) -> str:
+        return re.sub(r"[^a-z0-9-]+", "-", str(plan.get("slug") or f"product-{product.id}").lower()).strip("-")[:40]
+
+    @staticmethod
+    def palette_of(plan: dict) -> list[str]:
+        return ((plan.get("palette") or []) + ["#F7F3EC", "#2B2B2B", "#A3B18A"])[:3]
+
+    def check_plan(self, blocklist, plan: dict) -> None:
+        hits = blocklist.check_many(plan.get("image_prompt"), plan.get("title_hint"), json.dumps(plan.get("planner_spec") or {}),
+                                    json.dumps(plan.get("spreadsheet_spec") or {}), json.dumps(plan.get("merch_spec") or {}))
+        if hits:
+            raise RuntimeError(f"blocklist hit in creator plan: {hits}")
+
     def _create_one(self, session, product: Product, storage, blocklist, images) -> None:
         full = dict(product.brief_json or {})
         brief = {k: v for k, v in full.items() if k not in INTERNAL_KEYS}
         mock_hint = " (This is a MOCK run; placeholder art is expected.)" if self._is_mock_run else ""
-        comments = session.execute(select(OwnerNote).where(
-            OwnerNote.product_id == product.id, OwnerNote.kind == OwnerNoteKind.COMMENT,
-            OwnerNote.status.is_(None))).scalars().all()
+        comments = self.open_comments(session, product)
         owner_notes = ("\n\nOWNER NOTES on this product (apply them):\n" + "\n".join(f"- {c.text}" for c in comments)) \
             if comments and not full.get("revision") else ""
         user = (f"Brief:\n{json.dumps({**brief, 'product_type': product.product_type}, indent=2)}{mock_hint}"
@@ -389,16 +447,33 @@ class CreatorAgent(Agent):
         if not isinstance(plan, dict):
             raise RuntimeError("creator plan JSON was not an object")
         product.add_cost(result.cost_usd)
+        self.check_plan(blocklist, plan)
 
-        hits = blocklist.check_many(plan.get("image_prompt"), plan.get("title_hint"), json.dumps(plan.get("planner_spec") or {}),
-                                    json.dumps(plan.get("spreadsheet_spec") or {}), json.dumps(plan.get("merch_spec") or {}))
-        if hits:
-            raise RuntimeError(f"blocklist hit in creator plan: {hits}")
+        slug = self.slug_of(plan, product)
+        plan = self.produce(session, product, brief, plan, storage, blocklist, images,
+                            note=revision_note(full) + owner_notes, base=f"products/{product.id}-{slug}", context=user)
 
-        slug = re.sub(r"[^a-z0-9-]+", "-", str(plan.get("slug") or f"product-{product.id}").lower()).strip("-")[:40]
-        base = f"products/{product.id}-{slug}"
-        palette = (plan.get("palette") or []) + ["#F7F3EC", "#2B2B2B", "#A3B18A"]
-        palette = palette[:3]
+        done = list(full.get("revisions_done") or [])
+        if full.get("revision"):
+            rev = {k: v for k, v in full["revision"].items() if k != "previous_plan"}
+            done.append({**rev, "completed_run": self.run_id})
+        product.brief_json = {**brief, "creator_plan": plan, **({"revisions_done": done} if done else {}),
+                              **({"edits_done": full["edits_done"]} if full.get("edits_done") else {})}
+        for c in comments:
+            c.status = "included"
+        for n in session.execute(select(OwnerNote).where(OwnerNote.product_id == product.id,
+                                                         OwnerNote.kind == OwnerNoteKind.REVISION,
+                                                         OwnerNote.status == "open")).scalars():
+            n.status = "addressed"
+        self.log.info("product created", product_id=product.id, files=len(product.file_paths), images=len(product.image_paths))
+
+    def produce(self, session, product: Product, brief: dict, plan: dict, storage, blocklist, images, *,
+                note: str, base: str, context: str = "", html: str | None = None, art: bytes | None = None) -> dict:
+        """Turn a plan into the deliverable files and listing images under `base` and set them on the product.
+        `html` / `art` let the Editor start from an existing design instead of designing from scratch.
+        Returns the plan with the production details added (design_html, file_check, merch ...)."""
+        slug = self.slug_of(plan, product)
+        palette = self.palette_of(plan)
         scene_key = int(hashlib.md5(slug.encode()).hexdigest(), 16)
         title = mockups.short_title(str(plan.get("title_hint") or brief.get("concept", "Printable")))
         files: list[str] = []
@@ -407,22 +482,24 @@ class CreatorAgent(Agent):
         if product.product_type == ProductType.WALL_ART:
             if not images.is_real and not self._is_mock_run:
                 raise RuntimeError("wall art needs a real IMAGE_PROVIDER (e.g. openai); mock images are not sellable")
-            gen = images.generate(plan["image_prompt"], size=(1024, 1536), negative_prompt=plan.get("negative_prompt"))
-            product.add_cost(gen.cost_usd)
-            self.record_cost(session, gen.cost_usd, kind="image")
-            art = mockups.load(gen.data)
+            if art is None:
+                gen = images.generate(plan["image_prompt"], size=(1024, 1536), negative_prompt=plan.get("negative_prompt"))
+                product.add_cost(gen.cost_usd)
+                self.record_cost(session, gen.cost_usd, kind="image")
+                art = gen.data
+            art_img = mockups.load(art)
             # Etsy allows 5 digital files per listing: deliver the 5 print ratios; keep sources aside.
-            source = storage.put(f"{base}/source/original.png", gen.data, "image/png")
-            storage.put(f"{base}/source/print-letter.pdf", image_to_pdf(gen.data), "application/pdf")
+            source = storage.put(f"{base}/source/original.png", art, "image/png")
+            storage.put(f"{base}/source/print-letter.pdf", image_to_pdf(art), "application/pdf")
             plan = {**plan, "source_image": source}
             for label, ratio in PRINT_RATIOS.items():
                 fname = label.split(" ")[0]
-                files.append(storage.put(f"{base}/print-{fname}.png", mockups.upscale_for_print(art, ratio=ratio), "image/png"))
+                files.append(storage.put(f"{base}/print-{fname}.png", mockups.upscale_for_print(art_img, ratio=ratio), "image/png"))
             scene = self._scene(session, storage, images, "wall", scene_key, product)
-            imgs.append(storage.put(f"{base}/listing-01-primary.png", mockups.primary_image(art), "image/png"))
+            imgs.append(storage.put(f"{base}/listing-01-primary.png", mockups.primary_image(art_img), "image/png"))
             imgs.append(storage.put(f"{base}/listing-02-room.png",
-                                    mockups.scene_composite(art, scene, kind="wall") if scene else mockups.framed_mockup(art), "image/png"))
-            imgs.append(storage.put(f"{base}/listing-03-detail.png", mockups.detail_crop(art), "image/png"))
+                                    mockups.scene_composite(art_img, scene, kind="wall") if scene else mockups.framed_mockup(art_img), "image/png"))
+            imgs.append(storage.put(f"{base}/listing-03-detail.png", mockups.detail_crop(art_img), "image/png"))
             sizes = list(PRINT_RATIOS)
             imgs.append(storage.put(f"{base}/listing-04-included.png", self._card(
                 title, [f"Print ratio {s}" for s in sizes] + ["High-resolution PNG files"], palette), "image/png"))
@@ -430,7 +507,10 @@ class CreatorAgent(Agent):
         elif product.product_type in (ProductType.PLANNER, ProductType.TRACKER):
             spec = plan.get("planner_spec") or {}
             landscape = str(spec.get("orientation", "portrait")).lower() == "landscape"
-            html = self._design_pages(session, product, brief, plan, palette, landscape, revision_note(full) + owner_notes)
+            if html is None:
+                html = self._design_pages(session, product, brief, plan, palette, landscape, note)
+            else:
+                html = self._ensure_layout(session, product, html, context, landscape)
             hits = blocklist.check_many(re.sub(r"<[^>]+>", " ", html))
             if hits:
                 raise RuntimeError(f"blocklist hit in page text: {hits}")
@@ -457,7 +537,7 @@ class CreatorAgent(Agent):
 
         elif product.product_type == ProductType.SPREADSHEET:
             spec = plan.get("spreadsheet_spec") or {"title": title, "sheets": [{"name": "Sheet1", "columns": ["Date", "Item", "Amount"]}]}
-            spec, xlsx, check = self._build_workbook(session, product, spec, palette, user)
+            spec, xlsx, check = self._build_workbook(session, product, spec, palette, context)
             plan = {**plan, "spreadsheet_spec": spec, "file_check": check}
             files.append(storage.put(f"{base}/{slug}.xlsx", xlsx, XLSX_MIME))
             sheets = spec.get("sheets") or []
@@ -507,21 +587,10 @@ class CreatorAgent(Agent):
             imgs.append(storage.put(f"{base}/listing-06-included.png", self._card(title, included, palette), "image/png"))
         elif product.product_type in ProductType.PHYSICAL:
             plan = self._create_merch(session, product, brief, plan, palette, title, base, slug, storage, images,
-                                      files, imgs, revision_note(full) + owner_notes, scene_key)
+                                      files, imgs, note, scene_key, html=html, art=art)
         else:
             raise RuntimeError(f"product_type {product.product_type} is Phase 2 (POD) and not implemented in v1")
 
         product.file_paths = files
         product.image_paths = imgs
-        done = list(full.get("revisions_done") or [])
-        if full.get("revision"):
-            rev = {k: v for k, v in full["revision"].items() if k != "previous_plan"}
-            done.append({**rev, "completed_run": self.run_id})
-        product.brief_json = {**brief, "creator_plan": plan, **({"revisions_done": done} if done else {})}
-        for c in comments:
-            c.status = "included"
-        for n in session.execute(select(OwnerNote).where(OwnerNote.product_id == product.id,
-                                                         OwnerNote.kind == OwnerNoteKind.REVISION,
-                                                         OwnerNote.status == "open")).scalars():
-            n.status = "addressed"
-        self.log.info("product created", product_id=product.id, files=len(files), images=len(imgs))
+        return plan

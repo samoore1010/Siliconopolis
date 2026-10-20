@@ -11,13 +11,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy import select
 
-from pipeline.agents import AGENT_NAMES
+from pipeline.agents import AGENT_NAMES, prompt_file_for
 from pipeline.config import get_settings
 from pipeline.db import session_scope
 from pipeline.db.models import Event, Product, ProductState, Run
 from pipeline.logging_setup import get_logger
 from pipeline.storage import get_storage
-from pipeline.web.auth import require_viewer
+from pipeline.web.auth import require_viewer, require_write
 from pipeline.web.village_state import (
     AGENT_META,
     SERVICE_FOR_AGENT,
@@ -56,7 +56,7 @@ def village_agent(name: str):
         runs = s.execute(select(Run).where(Run.agent == name).order_by(Run.started_at.desc()).limit(20)).scalars().all()
         errors = [{"run_id": r.id, "at": r.started_at.isoformat(), "errors": r.errors_json} for r in runs if r.errors_json]
         state = next(a for a in collect_village_state(s, get_settings())["agents"] if a["name"] == name)
-        return {**state, "prompt_file": f"prompts/{name}.md", "meta": AGENT_META[name],
+        return {**state, "prompt_file": prompt_file_for(name), "meta": AGENT_META[name],
                 "runs": [RunInfo.from_row(r).__dict__ for r in runs], "errors": errors}
 
 
@@ -122,7 +122,7 @@ def village_rejects():
         return {"rejects": [{**product_summary(p), "reasons": (p.qa_result_json or {}).get("reasons", [])} for p in rows]}
 
 
-@router.post("/run/{agent}")
+@router.post("/run/{agent}", dependencies=[Depends(require_write)])
 def village_run_now(agent: str):
     """Trigger the Railway cron service for an agent. Read-only w.r.t. Etsy: it only starts a normal run,
     which enforces caps, locking and draft-only exactly like a scheduled run."""

@@ -44,7 +44,7 @@ def test_dashboard_end_to_end(client):
 
     ov = client.get("/api/dashboard/overview").json()
     labels = [s["label"] for s in ov["stages"]]
-    assert labels == ["Ideas", "Built", "Approved", "Etsy drafts", "Live", "Rejected"]
+    assert labels == ["Ideas", "Built", "With the Editor", "Approved", "Etsy drafts", "Live", "Rejected"]
     assert any("QA approved" in a["text"] or "QA rejected" in a["text"] for a in ov["activity"])
     assert not any(a["kind"] == "run_started" for a in ov["activity"])
     assert set(ov["last_runs"]) >= {"researcher", "creator", "qa"}

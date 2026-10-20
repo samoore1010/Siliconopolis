@@ -2,9 +2,10 @@
 
 Everything shown comes from the database and storage the agents write to. The only writes are the
 owner's own input: run briefs for the Researcher (each steers exactly one research run), notes and
-change requests on a product (which send it back to the Creator), and deleting products that are not
-on Etsy. Writes need the custom X-Siliconopolis header, which a cross-site form cannot send, so a
-logged-in browser cannot be tricked into posting them.
+change requests on a product (a rebuild by the Creator, or a polish by the Editor), the order of the
+build and polish queues, Stop, and deleting products that are not on Etsy. Writes need the custom
+X-Siliconopolis header, which a cross-site form cannot send, so a logged-in browser cannot be tricked
+into posting them.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -43,18 +44,14 @@ from pipeline.generators.mockups import short_title
 from pipeline.guardrails.caps import briefs_this_week, drafts_today, todays_spend
 from pipeline.schedule import next_run
 from pipeline.storage import get_storage
-from pipeline.web.auth import require_viewer
-from pipeline.web.village_state import _aware, product_summary
+from pipeline.web.auth import require_viewer, require_write
+from pipeline.web.village_state import AGENT_META, _aware, product_summary
 
 router = APIRouter(prefix="/api/dashboard", dependencies=[Depends(require_viewer)])
 
+# states the owner can send back to the Creator (rebuild) or to the Editor (polish): never anything on Etsy
 REVISABLE = (ProductState.CREATED, ProductState.APPROVED, ProductState.REJECTED)
 MAX_NOTE_CHARS = 2000
-
-
-def require_write(x_siliconopolis: str | None = Header(None)) -> None:
-    if x_siliconopolis != "1":
-        raise HTTPException(403, "missing X-Siliconopolis header")
 
 
 class NoteIn(BaseModel):
@@ -63,6 +60,11 @@ class NoteIn(BaseModel):
 
 class CommentIn(NoteIn):
     revise: bool = False
+
+
+class EditIn(BaseModel):
+    note: str = Field("", max_length=MAX_NOTE_CHARS)
+    include_qa: bool = True  # pass QA's improvement suggestions along with the note
 
 
 class BriefIn(BaseModel):
@@ -80,7 +82,7 @@ class DeleteIn(BaseModel):
     state: str | None = None  # e.g. "rejected": delete every product in that state
 
 
-UNDELETABLE = (ProductState.DRAFTED, ProductState.PUBLISHED)
+UNDELETABLE = ProductState.ON_ETSY
 
 
 def _note(n: OwnerNote) -> dict[str, Any]:
@@ -91,6 +93,7 @@ def _note(n: OwnerNote) -> dict[str, Any]:
 STAGES = [
     {"state": ProductState.BRIEF, "label": "Ideas", "help": "Researched product ideas waiting to be built"},
     {"state": ProductState.CREATED, "label": "Built", "help": "Files and listing images made, waiting for QA"},
+    {"state": ProductState.EDITING, "label": "With the Editor", "help": "Being polished by the Editor, then back through QA"},
     {"state": ProductState.APPROVED, "label": "Approved", "help": "Passed QA, waiting to be drafted on Etsy"},
     {"state": ProductState.DRAFTED, "label": "Etsy drafts", "help": "Draft listings waiting for you to publish"},
     {"state": ProductState.PUBLISHED, "label": "Live", "help": "Published on Etsy"},
@@ -99,8 +102,7 @@ STAGES = [
 STATE_LABEL = {s["state"]: s["label"] for s in STAGES} | {ProductState.RETIRED: "Retired"}
 TYPE_LABEL = {"wall_art": "Wall art", "planner": "Planner", "tracker": "Tracker", "spreadsheet": "Spreadsheet",
               "apparel": "Apparel", "mug": "Mug"}
-AGENT_LABEL = {"researcher": "Researcher", "creator": "Creator", "qa": "QA", "lister": "Lister", "analyst": "Analyst",
-               "fulfiller": "Fulfiller"}
+AGENT_LABEL = {name: meta["title"] for name, meta in AGENT_META.items()}
 FILE_TYPES = {".pdf": "application/pdf", ".png": "image/png", ".xlsx":
               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".html": "text/html"}
 
@@ -125,6 +127,9 @@ def _card(p: Product) -> dict[str, Any]:
         "top_reason": str(reasons[0])[:220] if reasons and not qa.get("pass") else None,
         "created_at": _aware(p.created_at).isoformat() if p.created_at else None,
         "revision_pending": bool(brief.get("revision")),
+        "edit_pending": bool(brief.get("edit")),
+        "edit_failed": (brief.get("edits_done") or [{}])[-1].get("failed", False) and not brief.get("edit"),
+        "polished": any(not e.get("failed") for e in brief.get("edits_done") or []),
         "deletable": p.state not in UNDELETABLE and not p.locked_by,
         "from_brief": brief.get("from_brief"),
     }
@@ -135,6 +140,10 @@ def _sentence(e: Event, titles: dict[int, str]) -> str | None:
     t = f"“{titles.get(e.product_id, f'product {e.product_id}')}”" if e.product_id else ""
     who = AGENT_LABEL.get(e.agent or "", e.agent or "System")
     if e.kind == EventKind.TRANSITION:
+        if e.agent == "owner":  # the owner's own moves carry a ready-made sentence
+            return e.message
+        if e.agent == "editor":
+            return f"Editor polished {t}" if e.to_state == ProductState.CREATED else f"Editor gave {t} back: {e.message[:160]}"
         return {
             ProductState.BRIEF: f"Researcher proposed {t}",
             ProductState.CREATED: f"Creator built {t}",
@@ -148,7 +157,7 @@ def _sentence(e: Event, titles: dict[int, str]) -> str | None:
         if not m:
             return f"{who} finished a run"
         status, n, cost, errs = m.group(1), int(m.group(2)), float(m.group(3)), int(m.group(4))
-        verb = {"researcher": "proposed", "creator": "built", "qa": "reviewed", "lister": "drafted",
+        verb = {"researcher": "proposed", "creator": "built", "editor": "polished", "qa": "reviewed", "lister": "drafted",
                 "analyst": "analysed"}.get(e.agent or "", "handled")
         text = f"{who} {verb} {n} product{'s' if n != 1 else ''}" if e.agent != "researcher" else f"{who} proposed {n} idea{'s' if n != 1 else ''}"
         if status == "failed":
@@ -254,6 +263,8 @@ def overview():
     schedule = [{"key": k, "label": label, "at": next_run(k, now).isoformat()} for k, label in (
         ("researcher", "Research run"), ("creator", "Build, review & list"), ("fulfiller", "Order check"),
         ("analyst", "Sales analysis"))]
+    if counts.get(ProductState.EDITING):
+        schedule.insert(1, {"key": "editor", "label": "Polish (Editor)", "at": next_run("editor", now).isoformat()})
 
     stages = [{**st, "count": counts.get(st["state"], 0)} for st in STAGES]
     return {
@@ -292,7 +303,7 @@ def product(product_id: int):
             raise HTTPException(404, "unknown product")
         brief = {k: v for k, v in (p.brief_json or {}).items()
                  if k not in ("creator_plan", "market", "run_id", "create_attempts", "last_create_error", "niche",
-                              "revision", "revisions_done")}
+                              "revision", "revisions_done", "edit", "edits_done", "last_edit_error")}
         notes = s.execute(select(OwnerNote).where(OwnerNote.product_id == product_id)
                           .order_by(OwnerNote.id.asc())).scalars().all()
         plan = (p.brief_json or {}).get("creator_plan") or {}
@@ -310,6 +321,14 @@ def product(product_id: int):
         design = plan.get("design_html")
         if design:
             files.append({"name": "design source (HTML)", "url": f"/api/dashboard/file/{p.id}/design", "kind": "HTML"})
+        full = p.brief_json or {}
+        edits = [{"round": e.get("round"), "note": e.get("note"), "improvements": e.get("improvements") or [],
+                  "changes_made": e.get("changes_made") or [], "kept": e.get("kept") or [], "failed": bool(e.get("failed")),
+                  "error": e.get("error"), "cost_usd": e.get("cost_usd"), "model": e.get("model"),
+                  "requested_at": e.get("requested_at"), "previous_scores": (e.get("previous_qa") or {}).get("scores") or {},
+                  "before": [f"/api/dashboard/product/{p.id}/before/{i}/{j}" for j in range(len(e.get("previous_images") or []))]}
+                 for i, e in enumerate(full.get("edits_done") or [])]
+        pending_edit = full.get("edit")
         return {
             **_card(p),
             "brief": brief,
@@ -325,13 +344,19 @@ def product(product_id: int):
                    "reviewed": qa.get("reviewed")} if qa else None,
             "file_check": plan.get("file_check"),
             "comments": [_note(n) for n in notes],
-            "revision_pending": bool((p.brief_json or {}).get("revision")),
+            "revision_pending": bool(full.get("revision")),
             "can_revise": p.state in REVISABLE and not p.locked_by,
+            "can_edit": p.state in REVISABLE and not p.locked_by and bool(p.file_paths) and not full.get("revision"),
+            "edit_pending": {"note": pending_edit.get("note"), "improvements": pending_edit.get("improvements") or [],
+                             "requested_at": pending_edit.get("requested_at"), "attempts": pending_edit.get("attempts", 0)}
+                            if pending_edit else None,
+            "edits": edits,
+            "last_edit_error": full.get("last_edit_error"),
             "listing": {k: v for k, v in (p.listing_json or {}).items() if k in ("title", "description", "tags", "price", "etsy_url")},
             "images": [{"thumb": f"/api/village/image/{p.id}/{i}?w=600", "full": f"/api/village/image/{p.id}/{i}?w=1200"}
                        for i in range(len(p.image_paths or []))],
             "files": files,
-            "errors": [(p.brief_json or {}).get("last_create_error")] if (p.brief_json or {}).get("last_create_error") else [],
+            "errors": [full.get("last_create_error")] if full.get("last_create_error") else [],
             "timeline": [{"ts": _aware(e.ts).isoformat(), "text": txt} for e in history if (txt := _sentence(e, titles))],
         }
 
@@ -358,6 +383,27 @@ def product_file(product_id: int, index: str):
     if media == "text/html":  # never render model-written HTML on our origin
         media, disposition = "text/plain; charset=utf-8", "inline"
     return Response(data, media_type=media, headers={"Content-Disposition": f'{disposition}; filename="{name}"'})
+
+
+@router.get("/product/{product_id}/before/{edit_index}/{index}")
+def product_before_image(product_id: int, edit_index: int, index: int, w: int = Query(600, ge=32, le=1200)):
+    """A listing image from the version the Editor started from (kept so you can compare)."""
+    import io
+
+    from PIL import Image
+
+    with session_scope() as s:
+        p = s.get(Product, product_id)
+        edits = (p.brief_json or {}).get("edits_done") or [] if p else []
+        try:
+            key = edits[edit_index]["previous_images"][index]
+        except (IndexError, KeyError, TypeError):
+            raise HTTPException(404, "no such image")
+    img = Image.open(io.BytesIO(get_storage().get(key))).convert("RGB")
+    img.thumbnail((w, w))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=82)
+    return Response(buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"})
 
 
 def _brief(b: ResearchRequest) -> dict[str, Any]:
@@ -470,12 +516,14 @@ def _delete_product(s, p: Product, storage) -> str | None:
     if p.locked_by:
         return "an agent is working on it right now"
     keys = set()
-    for path in (p.file_paths or []) + (p.image_paths or []):
+    previous = [k for e in (p.brief_json or {}).get("edits_done") or []
+                for k in (e.get("previous_files") or []) + (e.get("previous_images") or [])]
+    for path in (p.file_paths or []) + (p.image_paths or []) + previous:
         key = storage.key_from_uri(path)
         keys.add(key)
-        folder = key.rsplit("/", 1)[0] + "/" if "/" in key else None
-        if folder and folder.startswith("products/") and folder.count("/") == 2:
-            keys.update(storage.list(folder))
+        parts = key.split("/")
+        if len(parts) >= 3 and parts[0] == "products":  # products/<id>-<slug>/... : the whole product folder
+            keys.update(storage.list("/".join(parts[:2]) + "/"))
     for key in keys:
         try:
             storage.delete(key)
@@ -529,6 +577,7 @@ def add_comment(product_id: int, body: CommentIn):
             if p.state not in REVISABLE:
                 raise HTTPException(409, {
                     ProductState.BRIEF: "This idea hasn't been built yet; your note will be used when it is.",
+                    ProductState.EDITING: "This product is with the Editor. Take it back from the polish queue first.",
                     ProductState.DRAFTED: "This product is already an Etsy draft; edit or delete it in Etsy.",
                     ProductState.PUBLISHED: "This product is live on Etsy; edit it in Etsy.",
                 }.get(p.state, f"Products in '{p.state}' can't be revised."))
@@ -555,21 +604,85 @@ def add_comment(product_id: int, body: CommentIn):
             brief.pop("last_create_error", None)
             p.brief_json = brief
             p.qa_result_json = None
-            p.priority = _top_priority(s)  # your changes are built first
-            transition(s, p, ProductState.BRIEF, message=f"{short_title(_title(p))}: owner requested changes")
+            p.priority = _top_priority(s, ProductState.BRIEF)  # your changes are built first
+            transition(s, p, ProductState.BRIEF, agent="owner",
+                       message=f"You asked the Creator to rebuild “{short_title(_title(p))}”")
         else:
             record_event(s, kind=EventKind.INFO, agent="owner", product_id=p.id, message=f"Owner commented: {text[:160]}")
         s.flush()
         return {"comment": _note(note), "state": p.state}
 
 
-# ---------------------------------------------------------------------------------------------- build queue & stop
-STOPPABLE = ("researcher", "creator")
+# ---------------------------------------------------------------------------------------------- send to the Editor
+@router.post("/product/{product_id}/edit", dependencies=[Depends(require_write)])
+def send_to_editor(product_id: int, body: EditIn):
+    """Send a built, approved or rejected product to the Editor for a polish. Your note (optional) and
+    QA's improvement suggestions go with it; the Editor starts from the current files. Never anything
+    already on Etsy. Nothing goes to the Editor unless you send it."""
+    note = body.note.strip()
+    with session_scope() as s:
+        p = s.get(Product, product_id)
+        if not p:
+            raise HTTPException(404, "unknown product")
+        if p.state not in REVISABLE:
+            raise HTTPException(409, {
+                ProductState.BRIEF: "This idea hasn't been built yet, so there is nothing to polish.",
+                ProductState.EDITING: "It's already in the Editor's queue.",
+                ProductState.DRAFTED: "This product is already an Etsy draft; edit it in Etsy.",
+                ProductState.PUBLISHED: "This product is live on Etsy; edit it in Etsy.",
+            }.get(p.state, f"Products in '{p.state}' can't be sent to the Editor."))
+        if p.locked_by:
+            raise HTTPException(409, "An agent is working on this product right now; try again in a few minutes.")
+        brief = dict(p.brief_json or {})
+        if brief.get("revision"):
+            raise HTTPException(409, "The Creator is about to rebuild this with your changes; wait for that first.")
+        if not p.file_paths or not brief.get("creator_plan"):
+            raise HTTPException(409, "This product has no built files to polish; ask the Creator to rebuild it.")
+        qa = p.qa_result_json or {}
+        improvements = [str(i) for i in (qa.get("improvements") or [])] if body.include_qa else []
+        if not note and not improvements:
+            raise HTTPException(422, "Add a note, or include QA's suggestions, so the Editor knows what to improve.")
+        if note:
+            s.add(OwnerNote(kind=OwnerNoteKind.EDIT, product_id=p.id, text=note, status="open"))
+        brief["edit"] = {"note": note, "improvements": improvements, "round": len(brief.get("edits_done") or []) + 1,
+                         "requested_at": utcnow().isoformat(), "previous_state": p.state,
+                         "previous_qa": {k: qa.get(k) for k in ("pass", "scores", "reasons", "verdict") if k in qa}}
+        brief.pop("last_edit_error", None)
+        p.brief_json = brief
+        p.priority = _top_priority(s, ProductState.EDITING)  # the latest request is polished first
+        transition(s, p, ProductState.EDITING, agent="owner", message=f"You sent “{short_title(_title(p))}” to the Editor")
+        s.flush()
+        return {"state": p.state, "edit": brief["edit"]}
+
+
+@router.delete("/queue/editor/{product_id}", dependencies=[Depends(require_write)])
+def take_back_from_editor(product_id: int):
+    """Cancel a polish that has not started: the product returns to where it was, unchanged."""
+    with session_scope() as s:
+        p = s.get(Product, product_id)
+        if not p or p.state != ProductState.EDITING:
+            raise HTTPException(404, "That product isn't waiting for the Editor.")
+        if p.locked_by:
+            raise HTTPException(409, "The Editor is polishing it right now; it will be back shortly.")
+        brief = dict(p.brief_json or {})
+        edit = brief.pop("edit", None) or {}
+        p.brief_json = brief
+        for n in s.execute(select(OwnerNote).where(OwnerNote.product_id == p.id, OwnerNote.kind == OwnerNoteKind.EDIT,
+                                                   OwnerNote.status == "open")).scalars():
+            n.status = "cancelled"
+        back = edit.get("previous_state") or ProductState.CREATED
+        transition(s, p, back, agent="owner", message=f"You took “{short_title(_title(p))}” back from the Editor")
+        return {"id": p.id, "state": p.state}
+
+
+# ---------------------------------------------------------------------------------------------- build / polish queues & stop
+STOPPABLE = ("researcher", "creator", "editor")
 LIVE_RUN_HOURS = 6  # an unfinished run older than this crashed; don't show it as working
+QUEUES = {"creator": ProductState.BRIEF, "editor": ProductState.EDITING}  # worker -> the state it claims from
 
 
-def _top_priority(s) -> int:
-    lowest = s.execute(select(func.min(Product.priority)).where(Product.state == ProductState.BRIEF)).scalar()
+def _top_priority(s, state: str) -> int:
+    lowest = s.execute(select(func.min(Product.priority)).where(Product.state == state)).scalar()
     return min(0, (lowest if lowest is not None else 0)) - 1
 
 
@@ -585,10 +698,10 @@ def _working(s) -> list[dict[str, Any]]:
         seen.add(r.agent)
         current = s.execute(select(Product).where(Product.locked_by == f"{r.agent}:{r.id}")).scalars().first()
         planned = None
-        if r.agent == "creator":
-            from pipeline.agents.creator import CreatorAgent
+        if r.agent in QUEUES:
+            from pipeline.agents import registry
 
-            planned = CreatorAgent.DEFAULT_BATCH
+            planned = registry()[r.agent].DEFAULT_BATCH
         out.append({"agent": r.agent, "label": AGENT_LABEL.get(r.agent, r.agent), "run_id": r.id,
                     "started_at": _aware(r.started_at).isoformat(), "items": r.items_processed, "planned": planned,
                     "current": {"id": current.id, "title": short_title(_title(current))} if current else None,
@@ -596,50 +709,79 @@ def _working(s) -> list[dict[str, Any]]:
     return out
 
 
-@router.get("/queue")
-def build_queue():
-    """Ideas waiting for the Creator, in the order they will be built."""
-    from pipeline.agents.creator import CreatorAgent
+def _queue(worker: str) -> dict[str, Any]:
+    """Products waiting for a worker (Creator: ideas to build; Editor: products to polish), in order."""
+    from pipeline.agents import registry
 
+    state = QUEUES[worker]
     with session_scope() as s:
-        building = s.execute(select(Product).where(Product.state == ProductState.BRIEF,
-                                                   Product.locked_by.like("creator:%"))).scalars().all()
-        waiting = s.execute(select(Product).where(Product.state == ProductState.BRIEF, Product.locked_by.is_(None))
+        working_now = s.execute(select(Product).where(Product.state == state,
+                                                      Product.locked_by.like(f"{worker}:%"))).scalars().all()
+        waiting = s.execute(select(Product).where(Product.state == state, Product.locked_by.is_(None))
                             .order_by(*QUEUE_ORDER)).scalars().all()
-        creator = next((w for w in _working(s) if w["agent"] == "creator"), None)
-        return {"building": [_card(p) for p in building], "queue": [_card(p) for p in waiting],
-                "batch_size": CreatorAgent.DEFAULT_BATCH, "creator": creator,
-                "next_build_at": next_run("creator").isoformat()}
+        live = next((w for w in _working(s) if w["agent"] == worker), None)
+        return {"building": [_card(p) for p in working_now], "queue": [_card(p) for p in waiting],
+                "batch_size": registry()[worker].DEFAULT_BATCH, "worker": live, "next_run_at": next_run(worker).isoformat()}
 
 
-@router.post("/queue/order", dependencies=[Depends(require_write)])
-def reorder_queue(body: OrderIn):
-    """Set the build order: the ids given come first, in this order; anything not listed follows."""
+def _reorder(worker: str, ids: list[int]) -> dict[str, Any]:
+    """The ids given come first, in this order; anything not listed follows."""
     with session_scope() as s:
-        rows = {p.id: p for p in s.execute(select(Product).where(Product.id.in_(body.ids),
-                                                                Product.state == ProductState.BRIEF)).scalars()}
-        order = [i for i in body.ids if i in rows]
+        rows = {p.id: p for p in s.execute(select(Product).where(Product.id.in_(ids),
+                                                                Product.state == QUEUES[worker])).scalars()}
+        order = [i for i in ids if i in rows]
         for pos, pid in enumerate(order):
             rows[pid].priority = pos
         return {"order": order}
 
 
-@router.post("/queue/{product_id}/next", dependencies=[Depends(require_write)])
-def build_next(product_id: int):
+def _next(worker: str, product_id: int) -> dict[str, Any]:
     with session_scope() as s:
         p = s.get(Product, product_id)
-        if not p or p.state != ProductState.BRIEF:
-            raise HTTPException(404, "That idea isn't waiting to be built.")
-        p.priority = _top_priority(s)
+        if not p or p.state != QUEUES[worker]:
+            raise HTTPException(404, "That product isn't in this queue.")
+        p.priority = _top_priority(s, QUEUES[worker])
         return {"id": p.id, "priority": p.priority}
+
+
+@router.get("/queue")
+def build_queue():
+    """Ideas waiting for the Creator, in the order they will be built."""
+    return _queue("creator")
+
+
+@router.get("/queue/editor")
+def polish_queue():
+    """Products waiting for the Editor, in the order they will be polished."""
+    return _queue("editor")
+
+
+@router.post("/queue/order", dependencies=[Depends(require_write)])
+def reorder_queue(body: OrderIn):
+    return _reorder("creator", body.ids)
+
+
+@router.post("/queue/editor/order", dependencies=[Depends(require_write)])
+def reorder_polish_queue(body: OrderIn):
+    return _reorder("editor", body.ids)
+
+
+@router.post("/queue/editor/{product_id}/next", dependencies=[Depends(require_write)])
+def polish_next(product_id: int):
+    return _next("editor", product_id)
+
+
+@router.post("/queue/{product_id}/next", dependencies=[Depends(require_write)])
+def build_next(product_id: int):
+    return _next("creator", product_id)
 
 
 @router.post("/agents/{agent}/stop", dependencies=[Depends(require_write)])
 def stop_agent(agent: str):
-    """Ask a running Researcher/Creator to stop: it finishes the item in hand, keeps everything done
-    so far, and ends the run. The next scheduled run happens as normal."""
+    """Ask a running Researcher/Creator/Editor to stop: it finishes the item in hand, keeps everything
+    done so far, and ends the run. The next scheduled run happens as normal."""
     if agent not in STOPPABLE:
-        raise HTTPException(404, "Only the Researcher and the Creator can be stopped mid-run.")
+        raise HTTPException(404, "Only the Researcher, the Creator and the Editor can be stopped mid-run.")
     with session_scope() as s:
         live = next((w for w in _working(s) if w["agent"] == agent), None)
         if not live:

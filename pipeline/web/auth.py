@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import secrets
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from pipeline.config import get_settings
 
 _basic = HTTPBasic(auto_error=False)
+
+
+def require_write(x_siliconopolis: str | None = Header(None)) -> None:
+    """Every state-changing route needs this custom header. A cross-site form cannot send it, so a
+    logged-in browser cannot be tricked into posting (basic-auth credentials are sent automatically)."""
+    if x_siliconopolis != "1":
+        raise HTTPException(403, "missing X-Siliconopolis header")
 
 
 def require_viewer(credentials: HTTPBasicCredentials | None = Depends(_basic)) -> str:

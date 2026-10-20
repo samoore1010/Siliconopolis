@@ -266,6 +266,7 @@ def test_stop_ends_a_run_after_the_current_item(session, monkeypatch):
     client = _client()
     assert client.post("/api/dashboard/agents/creator/stop", headers=HDR).status_code == 409  # not running
     assert client.post("/api/dashboard/agents/qa/stop", headers=HDR).status_code == 404
+    assert client.post("/api/dashboard/agents/editor/stop", headers=HDR).status_code == 409  # stoppable, not running
 
     original = CreatorAgent.report_progress
     calls = []

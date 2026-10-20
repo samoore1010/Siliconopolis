@@ -20,12 +20,14 @@ class Base(DeclarativeBase):
 class ProductState:
     BRIEF = "brief"
     CREATED = "created"
+    EDITING = "editing"    # owner sent it to the Editor for a polish; goes back to `created` (then QA) after
     APPROVED = "approved"
     REJECTED = "rejected"
     DRAFTED = "drafted"
     PUBLISHED = "published"  # set by Analyst when it observes the owner published it on Etsy
     RETIRED = "retired"
-    ALL = (BRIEF, CREATED, APPROVED, REJECTED, DRAFTED, PUBLISHED, RETIRED)
+    ALL = (BRIEF, CREATED, EDITING, APPROVED, REJECTED, DRAFTED, PUBLISHED, RETIRED)
+    ON_ETSY = (DRAFTED, PUBLISHED)
 
 
 class ProductType:
@@ -155,7 +157,8 @@ class OwnerNoteKind:
     DIRECTIVE = "directive"  # shop-wide direction for the Researcher, e.g. "focus on Halloween decor"
     COMMENT = "comment"      # a note on one product
     REVISION = "revision"    # a note on one product that sends it back to the Creator
-    ALL = (DIRECTIVE, COMMENT, REVISION)
+    EDIT = "edit"            # a note on one product that sends it to the Editor for a polish
+    ALL = (DIRECTIVE, COMMENT, REVISION, EDIT)
 
 
 class OwnerNote(Base):

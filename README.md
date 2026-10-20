@@ -1,17 +1,35 @@
-# Etsy Agent Pipeline
+# Siliconopolis — Etsy Agent Pipeline
 
-A near-autonomous, five-agent system that researches, creates, quality-checks and **drafts** digital
-products on an Etsy shop. One human checkpoint: the owner reviews draft listings in the Etsy app and
-publishes the good ones. The system never publishes on its own.
+A near-autonomous, seven-agent system that researches, creates, polishes, quality-checks and
+**drafts** digital products (and in-house printed shirts/mugs) on an Etsy shop. One human
+checkpoint: the owner reviews draft listings in the Etsy app and publishes the good ones. The
+system never publishes on its own.
 
 ```
 Researcher ──► [brief] ──► Creator ──► [created] ──► QA ──► [approved | rejected]
+                                          ▲                   │
+                 you: "Polish it" ──► [editing] ──► Editor ───┘ (back through QA)
                                                               │
                                                               ▼
 Analyst ◄── sales/stats ◄── Etsy ◄── [drafted] ◄────────── Lister
-   │
-   └──► research_notes (feeds next Researcher run)
+   │                           │
+   └──► research_notes         └──► orders ──► Fulfiller ──► print shop (/print)
 ```
+
+- **Researcher** (weekly) proposes ideas from niches, your run briefs and the Analyst's notes.
+- **Creator** (daily) builds first drafts: Claude-designed planner pages, verified spreadsheets,
+  AI wall art, shirt/mug prints, plus listing images.
+- **Editor** (owner-triggered, hourly cron) is a senior designer on a stronger model (Opus by
+  default). You send it a built, approved or rejected product with an optional note; QA's
+  improvement suggestions go along. It edits rather than rebuilds, keeps what works, raises the
+  polish, and sends the result back through QA, which checks each requested change was made. It
+  has its own queue (reorderable), Stop button, and a per-product cost cap. Nothing goes to the
+  Editor automatically. The Creator's "start over with these changes" stays for a fresh take.
+- **QA** reviews the real files and listing images, enforces IP safety, near-duplicate and
+  sellability bars.
+- **Lister** writes the copy and saves an Etsy **draft** (never publishes).
+- **Analyst** (weekly) reads stats and sales back into research notes.
+- **Fulfiller** (hourly) turns shirt/mug orders into print jobs for the family print shop.
 
 Agents talk only through the `products` table (a queue keyed by `state`). Every agent run is an
 independent process that claims rows with a compare-and-swap lock, does its work, records a `runs`
@@ -20,12 +38,17 @@ row (counts, errors, token/image cost) and exits — which is exactly what Railw
 Spec: [`etsy-agent-pipeline-instructions_1.md`](etsy-agent-pipeline-instructions_1.md) and the
 village UI addendum [`village-addendum.md`](village-addendum.md). Deployment: [`DEPLOY.md`](DEPLOY.md).
 
-## The village (dashboard)
+## The app and the village
 
-`/village` (the root URL redirects there) is a live isometric pixel office rendered from real
-database state: five desks with a character per agent, the Brain (the `products` queue) in the
-middle, a conveyor path, an Etsy outbox for drafts waiting on you, a reject bin, and a sidebar with
-spend/draft/brief meters and a live event feed. Characters show **working / idle / sleeping /
+`/dashboard` (the root URL redirects there) is the owner's app: Home (what needs you, the live
+office, schedule, spend), Products (every product with images, files, why it was chosen, the
+market analysis, QA's verdict, your feedback; the Creator's build queue and the Editor's polish
+queue, both reorderable with Stop), Research (brief the next run), Orders, Team.
+
+`/village` (embedded on Home) is a live isometric pixel office rendered from real database state:
+a desk with a character per agent, the Brain (the `products` queue) in the middle, a conveyor
+path, an Etsy outbox for drafts waiting on you, a reject bin, and a sidebar with spend/draft/brief
+meters and a live event feed. Characters show **working / idle / sleeping /
 needs you / cap reached / error / stale lock**, derived from the `runs`, `products` and `events`
 tables (`pipeline/web/village_state.py`). Click a desk, the Brain, the outbox, the bin or a feed
 item for details. Protected by HTTP basic auth (`VILLAGE_USER` / `VILLAGE_PASSWORD`); `/health`
@@ -46,6 +69,8 @@ another (mock mode only; refuses to run in production).
 | 5 — Village UI (events table, authenticated API, `/village` scene, `demo`) | done |
 | 7 — Owner dashboard (`/dashboard`: products with images/files, why chosen, market analysis, QA verdicts, plain-English activity) | done |
 | 6 — Real product design (Claude-designed HTML planners → Chromium PDFs, typed spreadsheets, AI lifestyle mockups) | done |
+| 8 — In-house merch (shirts/mugs by the family print shop, `/print` queue, Fulfiller) | done |
+| 9 — Owner controls (run briefs, build queue + Stop, rebuild with changes) and the Editor (owner-triggered polish on a stronger model, own queue, back through QA) | done |
 
 ### How products are made (Milestone 6)
 
@@ -84,9 +109,9 @@ images to `storage/products/<id>-<slug>/`.
 
 | Command | What it does | Exit code |
 |---|---|---|
-| `python -m pipeline run <agent>` | one agent: `researcher`, `creator`, `qa`, `lister`, `analyst` | 0 ok, 1 failed, 3 cap reached |
+| `python -m pipeline run <agent>` | one agent: `researcher`, `creator`, `editor`, `qa`, `lister`, `analyst`, `fulfiller` | 0 ok, 1 failed, 3 cap reached |
 | `python -m pipeline run daily` | `creator -> qa -> lister` (the daily cron) | worst of the three |
-| `python -m pipeline run-all` | all five in order | worst |
+| `python -m pipeline run-all` | every agent once, in pipeline order | worst |
 | `python -m pipeline status [--json]` | counts by state, recent runs, spend | 0 |
 | `python -m pipeline smoke [--json]` | DB, storage, Anthropic, Etsy, Printify (live only), image provider | 0 pass / 1 fail |
 | `python -m pipeline web` | village dashboard at `/village`, `/api/village/*`, `/status`, `/health`, Etsy OAuth routes | — |
@@ -109,11 +134,13 @@ See [`.env.example`](.env.example) for the full list. Key ones:
 | `DRY_RUN` | `true` = live reads, skip all external writes |
 | `DATABASE_URL` | Railway injects Postgres; `postgres://` is normalised to `postgresql+psycopg://` |
 | `STORAGE_BACKEND` | `local` or `s3` (+ `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) |
-| `MODEL_RESEARCH` / `MODEL_WORKER` / `MODEL_CHEAP` | Claude models per role |
+| `MODEL_RESEARCH` / `MODEL_WORKER` / `MODEL_CHEAP` | Claude models per role (Researcher/Analyst, Creator/QA/Lister, order checks) |
+| `MODEL_EDITOR`, `EDITOR_MAX_COST_PER_PRODUCT_USD` | the Editor's (stronger) model and its budget per polish |
 | `LLM_PROVIDER` | `anthropic` or `mock`; defaults to anthropic when a key is set |
 | `DAILY_DRAFT_CAP`, `WEEKLY_BRIEF_CAP`, `MAX_DAILY_SPEND_USD` | hard caps; hitting one stops the run (exit 3) |
 | `VILLAGE_USER`, `VILLAGE_PASSWORD` | basic auth for the dashboard, status and OAuth start routes (required off-local) |
 | `RAILWAY_API_TOKEN`, `RAILWAY_SERVICE_IDS` | optional: enable the per-agent "Run now" buttons |
+| `PRINT_USER`, `PRINT_PASSWORD`, `ETSY_SHIPPING_PROFILE_ID`, `ETSY_PRODUCTION_PARTNER_ID` | in-house merch: the print shop's login and Etsy ids (see `DEPLOY.md`) |
 
 Other config files: `niches.yaml` (seeded with three placeholder niches), `blocklist.txt` (IP safety
 terms), `prompts/*.md` (one prompt per agent, editable without code changes).
@@ -149,12 +176,16 @@ pipeline/
   storage/             local + S3 backends
   adapters/etsy        base, guard (draft-only), mock, live, tokens
   adapters/printify    base, mock, live stub (Phase 2)
-  adapters/images      base, mock placeholder provider
-  agents/              researcher, creator, qa, lister, analyst (+ base Run bookkeeping)
-  generators/          pdf (reportlab), xlsx (openpyxl), mockups (Pillow)
+  adapters/images      base, mock placeholder provider, OpenAI (gpt-image)
+  agents/              researcher, creator, editor (subclasses creator: same production pipeline,
+                       stronger model, edits an existing design), qa, lister, analyst, fulfiller
+  generators/          render (HTML -> PDF/PNG via Chromium), xlsx (openpyxl + LibreOffice check),
+                       mockups (listing images), merch (print mockups), office (LibreOffice), pdf
   guardrails/          blocklist, caps
-  commands/            status, smoke
-  web/                 FastAPI app, basic auth, village API + state derivation, static village page
+  commands/            status, smoke, demo
+  schedule.py          next-run times (mirrors the Railway cron schedules)
+  web/                 FastAPI app, basic auth, dashboard API, village API + state, print queue API,
+                       static dashboard / village / print pages
 alembic/               migrations
 prompts/               agent prompts
 scripts/etsy_oauth.py  one-time OAuth PKCE helper
@@ -170,6 +201,8 @@ tests/                 unit, contract, draft-only, end-to-end (mock)
 | `researcher` | `0 13 * * 1` | Mon 6:00 AM | `python -m pipeline run researcher` |
 | `daily-pipeline` | `0 14 * * *` | daily 7:00 AM | `python -m pipeline run daily` |
 | `analyst` | `0 3 * * 1` | Sun 8:00 PM | `python -m pipeline run analyst` |
+| `fulfiller` | `0 * * * *` | hourly | `python -m pipeline run fulfiller` |
+| `editor` | `30 * * * *` | hourly | `python -m pipeline run editor` (exits at once when the polish queue is empty) |
 | `web` | always on | — | `python -m pipeline web` (pre-deploy: `alembic upgrade head`) |
 
 ## What is mocked / what the owner must supply

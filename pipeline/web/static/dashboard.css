@@ -79,6 +79,8 @@ input:focus, textarea:focus, select:focus, .btn:focus-visible, a:focus-visible {
 .st.brief { background: var(--info-soft); } .st.created { background: var(--warn-soft); color: var(--warn); }
 .st.approved, .st.drafted, .st.published, .st.done { background: var(--good-soft); color: var(--good); }
 .st.rejected, .st.failed { background: var(--bad-soft); color: var(--bad); }
+.st.editing { background: #dff4f2; color: #1d6b66; }
+@media (prefers-color-scheme: dark) { .st.editing { background: #173634; color: #7fded6; } }
 .st.queued, .st.running { background: var(--accent-soft); color: var(--accent); }
 
 /* ---------- home ---------- */
@@ -212,6 +214,11 @@ details.market summary { cursor: pointer; color: var(--accent); font-weight: 500
 .gallery .thumbs { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 .gallery .thumbs button { width: 64px; height: 64px; border-radius: 10px; border: 2px solid transparent; cursor: pointer; background: var(--sunken) center / cover; }
 .gallery .thumbs button.on { border-color: var(--accent); }
+.thumbs.before { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.thumbs.before a { width: 72px; height: 72px; border-radius: 10px; background: var(--sunken) center / cover; border: 1px solid var(--line); }
+details.edit-round { border-top: 1px solid var(--line); padding: 8px 0; }
+details.edit-round summary { cursor: pointer; }
+details.edit-round ul { margin: 4px 0; padding-left: 18px; }
 .verdict { border-radius: 10px; padding: 10px 12px; font-weight: 600; margin-bottom: 8px; }
 .verdict.ok { background: var(--good-soft); color: var(--good); } .verdict.no { background: var(--bad-soft); color: var(--bad); }
 .score { display: grid; grid-template-columns: 130px 1fr 28px; gap: 8px; align-items: center; font-size: 13.5px; margin: 4px 0; }
