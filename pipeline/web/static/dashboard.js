@@ -29,7 +29,10 @@ const FILTERS = [
   { key: "etsy", label: "Etsy drafts", states: ["drafted"] },
   { key: "live", label: "Live", states: ["published"] },
   { key: "rejected", label: "Rejected", states: ["rejected"] },
+  { key: "digital", label: "Digital", states: null, types: ["wall_art", "planner", "tracker", "spreadsheet"] },
+  { key: "merch", label: "Shirts & mugs", states: null, types: ["apparel", "mug"] },
 ];
+const matchesFilter = (f, p) => (!f.states || f.states.includes(p.state)) && (!f.types || f.types.includes(p.product_type));
 const SCORE_LABEL = { quality: "Visual quality", legibility: "Legibility", artifacts: "No glitches", matches_brief: "Matches the idea",
   design_polish: "Design polish", commercial_viability: "Would it sell?" };
 const COMMERCIAL = ["design_polish", "commercial_viability"];
@@ -119,6 +122,24 @@ function roundLine(p) {
   const verdict = q ? (q.pass ? `<span class="ok">QA approved</span>` : `<span class="bad">QA rejected</span>${q.total ? ` · ${q.done} of ${q.total} requested changes made` : ""}`) : "waiting for QA";
   const who = r.pending ? `round ${r.n} ${r.kind === "polish" ? "with the Editor" : "with the Creator"}` : `round ${r.n}, ${ROUND_KIND[r.kind] || r.kind}`;
   return `<div class="round">${who} · ${verdict}${r.rounds_rejected > 1 ? ` · rejected ${r.rounds_rejected}×` : ""}</div>`;
+}
+function physicalBlock(p) {
+  const d = p.physical_details;
+  if (!d) return "";
+  if (!d.item) return `<div class="sec"><h2>Product details</h2><p class="muted">The blank is chosen when the Creator builds it.</p></div>`;
+  const sw = (c) => `<span class="swatch ${c.offered ? "" : "off"}" title="${esc(c.name)}${c.offered ? "" : " (not offered)"}"><i style="background:${esc(c.hex)}"></i>${esc(c.name)}</span>`;
+  return `<div class="sec"><h2>Product details</h2>
+    <div class="grid3"><div><div class="k">Blank</div><p>${esc(d.label)}<br><span class="muted small">${esc(d.blank)}</span></p></div>
+      <div><div class="k">Material</div><p>${esc(d.material)}</p></div>
+      <div><div class="k">Print</div><p>${esc(d.method)} · ${esc(d.print_area)}</p></div></div>
+    <div class="lbl">Colours offered</div><div class="swatches wide">${d.colors.map(sw).join("")}</div>
+    <div class="lbl">Sizes & prices</div><div class="tags">${d.sizes.map((s) => `<span class="pill">${esc(s.size)} · ${money(s.price)}</span>`).join("")}</div>
+    ${d.personalization.length ? `<div class="lbl">Personalisation at checkout</div><ul class="small">${d.personalization.map((f) => `<li><b>${esc(f.label)}</b> up to ${esc(f.max_chars)} characters (e.g. ${esc(f.example || "")})</li>`).join("")}</ul>${d.instructions ? `<p class="small muted">Buyer sees: “${esc(d.instructions)}”</p>` : ""}` : `<p class="small muted">No personalisation.</p>`}
+    <div class="lbl">Money per sale</div>
+    <div class="grid3"><div><div class="k">Price</div><p>${money(d.price)}</p></div>
+      <div><div class="k">Paid to the print shop</div><p>${money(d.unit_cost)}</p></div>
+      <div><div class="k">Margin before Etsy fees</div><p><b>${money(d.margin)}</b><br><span class="muted small">postage (~${money(d.ship_cost)}) is charged to the buyer via the shipping profile · ships in ${d.processing_days.join("–")} days</span></p></div></div>
+  </div>`;
 }
 function roundsBlock(p) {
   const rounds = p.rounds || [];
@@ -324,13 +345,13 @@ function drawProducts() {
   const queueMode = !!worker;
   $("#search").hidden = queueMode; $("#select").hidden = queueMode;
   const all = store.products || [];
-  const counts = Object.fromEntries(FILTERS.map((f) => [f.key, f.states ? all.filter((p) => f.states.includes(p.state)).length : all.length]));
+  const counts = Object.fromEntries(FILTERS.map((f) => [f.key, all.filter((p) => matchesFilter(f, p)).length]));
   $("#filters").innerHTML = FILTERS.map((f) => `<button class="${store.filter === f.key ? "on" : ""}" data-f="${f.key}">${f.label}<b>${counts[f.key]}</b></button>`).join("");
   $$("#filters button").forEach((b) => (b.onclick = () => { history.replaceState(null, "", `#products/${b.dataset.f}`); store.filter = b.dataset.f; store.sel.clear(); drawProducts(); }));
   const f = FILTERS.find((x) => x.key === store.filter);
   const q = store.q.toLowerCase();
   if (queueMode) { $("#cards").innerHTML = ""; $("#cards-empty").hidden = true; $("#selbar").hidden = true; return drawQueue(worker); }
-  const list = all.filter((p) => (!f.states || f.states.includes(p.state)) && (!q || `${p.title} ${p.niche} ${p.one_liner}`.toLowerCase().includes(q)));
+  const list = all.filter((p) => matchesFilter(f, p) && (!q || `${p.title} ${p.niche} ${p.one_liner}`.toLowerCase().includes(q)));
   $("#banner").innerHTML = store.filter === "rejected" && list.length ? `<div class="banner"><span>These didn't pass QA or couldn't be built. Open one to see why and ask for a rebuild, or clear them out.</span>
       <button class="btn danger" id="del-rejected">Delete all ${list.length} rejected</button></div>`
     : store.filter === "etsy" && list.length ? `<div class="banner neutral"><span>These are drafts in your Etsy shop. Review and publish them in the Etsy app; nothing goes live without you.</span></div>` : "";
@@ -343,6 +364,7 @@ function drawProducts() {
       <div class="body">
         <div class="meta"><span class="st ${esc(p.state)}">${esc(p.stage)}</span><span>${esc(p.type_label)}</span>${p.price ? `<span>· ${money(p.price)}</span>` : ""}</div>
         <div class="t">${esc(p.title)}</div>
+        ${p.merch ? `<div class="merch-line">${esc(p.merch.label)} · ${plural(p.merch.colors, "colour")}${p.merch.sizes > 1 ? ` · ${plural(p.merch.sizes, "size")}` : ""}${p.merch.personalized ? " · personalised" : ""}${p.merch.margin != null ? ` · <b>${money(p.merch.margin)} margin</b>` : ""}</div>` : ""}
         <div class="o">${esc(p.one_liner)}</div>
         ${roundLine(p)}
         ${p.revision_pending ? `<div class="why-rev">Your changes are being made</div>` : ""}
@@ -547,6 +569,7 @@ async function openProduct(id) {
         ${qa.reasons.length ? `<details><summary class="lbl" style="cursor:pointer">QA's full notes</summary><ol>${qa.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ol></details>` : ""}
         ${p.file_check ? `<p class="small" style="color:${p.file_check.ok ? "var(--good)" : "var(--bad)"}">${p.file_check.ok ? "✓ File check passed" : "File check failed: " + esc((p.file_check.errors || []).slice(0, 2).join("; "))}</p>` : ""}
       </div>` : ""}
+    ${physicalBlock(p)}
     ${roundsBlock(p)}
     ${editsBlock(p)}
     ${onEtsy ? `<div class="sec"><h2>Changes</h2><p class="muted">This is on Etsy now, so make changes in the Etsy app.</p></div>`

@@ -96,7 +96,8 @@ def _shrink(png: bytes, long_side: int = 1200) -> bytes:
 
 class EditorAgent(CreatorAgent):
     name = "editor"
-    prompt_file = "editor"
+    prompt_file = "editor_digital"
+    prompt_files = ("editor_digital", "editor_physical")
 
     DEFAULT_BATCH = 5  # polishes per run; each one is bounded by EDITOR_MAX_COST_PER_PRODUCT_USD
 
@@ -267,7 +268,8 @@ class EditorAgent(CreatorAgent):
 
     def _ask_editor(self, session, product: Product, task: str, user: str, images: list[ImageInput]) -> tuple[dict, str | None]:
         self._spend_check(product)
-        result = self.ask(session, task=task, model=self.design_model, user=user, images=images, max_tokens=16000)
+        result = self.ask(session, task=task, model=self.design_model, user=user, images=images, max_tokens=16000,
+                          prompt=self.prompt_for(product.product_type))
         product.add_cost(result.cost_usd)
         return split_reply(result.text)
 

@@ -183,3 +183,35 @@ def test_mug_product(session):
     p = _built(session, "mug", "mug11")
     assert p.state == ProductState.APPROVED
     assert p.qa_result_json["file_check"]["size_px"] == [2550, 1050]
+
+
+def test_physical_products_use_their_own_prompts_and_show_details(session):
+    """Shirts/mugs are briefed with the physical prompt and the dashboard shows blank, colours, sizes and margin."""
+    from fastapi.testclient import TestClient
+
+    from pipeline.agents.creator import CreatorAgent
+    from pipeline.agents.editor import EditorAgent
+    from pipeline.db.models import Product
+    from pipeline.prompts import load_prompt
+    from pipeline.web.app import app
+
+    assert CreatorAgent.prompt_for("mug") == "creator_physical" and CreatorAgent.prompt_for("planner") == "creator_digital"
+    assert EditorAgent.prompt_for("apparel") == "editor_physical" and EditorAgent.prompt_for("wall_art") == "editor_digital"
+    assert "PHYSICAL" in load_prompt("creator_physical") and "merch_spec" in load_prompt("creator_physical")
+    assert "merch_spec" not in load_prompt("creator_digital") and "planner_spec" in load_prompt("creator_digital")
+    assert "print area" in load_prompt("editor_physical") and "DIGITAL" in load_prompt("editor_digital")
+
+    p = Product(state="brief", niche="n", product_type="mug", brief_json={"concept": "Family reunion mug", "target_price_usd": 19})
+    session.add(p)
+    session.commit()
+    CreatorAgent().run()
+    client = TestClient(app)
+    d = client.get(f"/api/dashboard/product/{p.id}").json()
+    det = d["physical_details"]
+    assert det["item"] == "mug11" and det["material"].startswith("Glossy") and det["method"] == "Sublimation"
+    assert det["sizes"] == [{"size": "11 oz", "price": 19.0}] and det["colors"][0]["name"] == "White"
+    assert det["margin"] == 13.0 and [f["label"] for f in det["personalization"]] == ["Family name", "Year"]
+    card = next(c for c in client.get("/api/dashboard/products").json()["products"] if c["id"] == p.id)
+    assert card["physical"] and card["merch"]["label"] == "11 oz Ceramic Mug" and card["merch"]["personalized"]
+    planner = next((c for c in client.get("/api/dashboard/products?state=brief").json()["products"]), None)
+    assert planner is None or not planner["physical"]
