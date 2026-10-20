@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import PurePosixPath
 
 from sqlalchemy import func, select
@@ -45,6 +46,30 @@ TAXONOMY_HINTS = {
 }
 # Etsy's two free-form listing properties ("custom1"/"custom2"): used for Size and Colour variations.
 SIZE_PROPERTY, COLOR_PROPERTY = 513, 514
+# Etsy rejects a listing whose tags or materials contain punctuation ("PDF/PNG" -> invalid_characters)
+_TAG_OK = re.compile(r"[^a-z0-9 \-]")
+_MATERIAL_OK = re.compile(r"[^A-Za-z0-9 ]")
+
+
+def clean_tags(raw: list, *, limit: int = 13) -> list[str]:
+    """<= 20 chars each, lowercase, letters/numbers/spaces/hyphens only, unique, at most 13."""
+    out: list[str] = []
+    for t in raw or []:
+        t = re.sub(r"\s+", " ", _TAG_OK.sub(" ", str(t).lower().replace("&", " and "))).strip()[:20].strip()
+        if t and t not in out:
+            out.append(t)
+    return out[:limit]
+
+
+def clean_materials(raw: list, fallback: list[str]) -> list[str]:
+    """<= 45 chars each, letters/numbers/spaces only ("PDF/PNG" becomes "PDF" and "PNG"), at most 13."""
+    out: list[str] = []
+    for m in raw or []:
+        for part in re.split(r"[/,+|]", str(m)):
+            part = re.sub(r"\s+", " ", _MATERIAL_OK.sub(" ", part)).strip()[:45].strip()
+            if part and part.lower() not in {o.lower() for o in out}:
+                out.append(part)
+    return (out or clean_materials(fallback, ["digital file"]))[:13]
 
 
 class ListerAgent(Agent):
@@ -103,7 +128,7 @@ class ListerAgent(Agent):
         pers = spec.get("personalization") or {}
         payload = {**payload, "type": "physical", "quantity": 99, "when_made": "made_to_order",
                    "shipping_profile_id": self.settings.etsy_shipping_profile_id,
-                   "materials": [str(m)[:45] for m in (copy.get("materials") or [item.material, item.method])][:13]}
+                   "materials": clean_materials(copy.get("materials") or [], [item.material, item.method])}
         for key, setting in (("readiness_state_id", "etsy_readiness_state_id"),
                              ("return_policy_id", "etsy_return_policy_id")):
             if getattr(self.settings, setting):
@@ -160,12 +185,11 @@ class ListerAgent(Agent):
             raise RuntimeError("lister: reply was not a JSON object")
 
         title = str(copy.get("title", "")).strip()[:140]
-        tags = [str(t).strip().lower()[:20] for t in copy.get("tags", []) if str(t).strip()]
-        tags = list(dict.fromkeys(tags))[:13]
+        tags = clean_tags(copy.get("tags", []))
         if len(tags) < 13:
-            fallback = [k.lower()[:20] for k in brief.get("keywords", [])] + (
+            fallback = clean_tags(list(brief.get("keywords", [])) + (
                 ["personalized gift", "custom gift", "gift for her", "gift for him"] if physical
-                else ["digital download", "printable", "instant download"])
+                else ["digital download", "printable", "instant download"]), limit=20)
             for f in fallback:
                 if len(tags) >= 13:
                     break
@@ -182,7 +206,8 @@ class ListerAgent(Agent):
         taxonomy_id = self._pick_taxonomy(product.product_type, str(copy.get("taxonomy_hint", "")), taxonomy)
         payload = {
             "title": title, "description": description, "tags": tags, "price": round(price, 2), "quantity": 999,
-            "taxonomy_id": taxonomy_id, "type": "download", "materials": copy.get("materials", ["digital file"])[:13],
+            "taxonomy_id": taxonomy_id, "type": "download",
+            "materials": clean_materials(copy.get("materials") or [], ["digital file"]),
             "state": "draft", **PRODUCTION_ATTRIBUTES,
         }
         inventory = None

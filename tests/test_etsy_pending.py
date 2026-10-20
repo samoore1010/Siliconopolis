@@ -69,3 +69,19 @@ def test_researcher_holds_wall_art_without_image_provider(monkeypatch):
     monkeypatch.setattr(ag, "ask", spy)
     ag.run()
     assert seen and all("wall_art" not in u.split("Allowed product_type values:")[1] for u in seen)
+
+
+def test_lister_cleans_tags_and_materials_for_etsy():
+    from pipeline.agents.lister import clean_materials, clean_tags
+
+    assert clean_materials(["PDF/PNG", "Digital file (300 dpi)", "PDF"], ["x"]) == ["PDF", "PNG", "Digital file 300 dpi"]
+    assert clean_materials([], ["100% cotton", "DTF transfer"]) == ["100 cotton", "DTF transfer"]
+    assert clean_materials(["///"], ["digital file"]) == ["digital file"]
+    tags = clean_tags(["Boho Print!", "wall art & decor", "line-art", "Line-Art", "a very long tag name over twenty"])
+    assert tags == ["boho print", "wall art and decor", "line-art", "a very long tag name"]
+
+
+def test_live_draft_links_to_shop_manager_not_the_public_page():
+    from pipeline.adapters.etsy.live import manage_url
+
+    assert manage_url("4599547183") == "https://www.etsy.com/your/shops/me/tools/listings/4599547183"

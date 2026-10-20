@@ -110,6 +110,15 @@ FILE_TYPES = {".pdf": "application/pdf", ".png": "image/png", ".xlsx":
               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".html": "text/html"}
 
 
+def _manage_url(p: Product) -> str | None:
+    """Shop Manager link for a product on Etsy (drafts have no public page). None in mock / dry-run."""
+    if not p.etsy_listing_id or p.etsy_listing_id == "dry-run" or get_settings().adapter_mode("etsy") != "live":
+        return (p.listing_json or {}).get("etsy_url") if get_settings().adapter_mode("etsy") == "mock" else None
+    from pipeline.adapters.etsy.live import manage_url
+
+    return manage_url(p.etsy_listing_id)
+
+
 def _title(p: Product) -> str:
     plan = (p.brief_json or {}).get("creator_plan") or {}
     listing = p.listing_json or {}
@@ -447,7 +456,8 @@ def product(product_id: int):
                             if pending_edit else None,
             "edits": edits,
             "last_edit_error": full.get("last_edit_error"),
-            "listing": {k: v for k, v in (p.listing_json or {}).items() if k in ("title", "description", "tags", "price", "etsy_url")},
+            "listing": {**{k: v for k, v in (p.listing_json or {}).items() if k in ("title", "description", "tags", "price", "etsy_url")},
+                        **({"etsy_url": _manage_url(p)} if _manage_url(p) else {})},
             "images": [{"thumb": f"/api/village/image/{p.id}/{i}?w=600", "full": f"/api/village/image/{p.id}/{i}?w=1200"}
                        for i in range(len(p.image_paths or []))],
             "files": files,
