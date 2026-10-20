@@ -170,3 +170,12 @@ def test_preview_formats_and_short_titles():
     html = preview_html(spec, sheets=[2])
     assert "55%" in html and "$1,200.00" in html and "keyword stuffing" not in html
     assert "Example entries included" in html
+
+
+def test_extract_html_strips_stray_fences():
+    from pipeline.generators import render
+
+    doc = "<html><body><div class='page'>x</div></body></html>"
+    assert render.extract_html(f"```html\n{doc}\n```") == doc
+    assert render.extract_html(f"```html\n{doc}") == doc  # unterminated fence used to print "```html" on the page
+    assert render.extract_html(f"Here is the design:\n{doc}\n```") == doc
