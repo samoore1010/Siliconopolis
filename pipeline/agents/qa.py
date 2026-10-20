@@ -118,9 +118,7 @@ class QAAgent(Agent):
         is_mock = self.settings.mode == "mock" and self.settings.app_env == "local"
         mock_hint = "MOCK RUN: placeholder images are expected and acceptable." if is_mock else "LIVE RUN: these are the real product images that will be listed."
         market = brief.get("market") or {}
-        rev = brief.get("revision") or (brief.get("revisions_done") or [{}])[-1]
-        owner = f"\n\nThe shop owner asked for these changes in this version; check they were made:\n{rev.get('feedback')}" \
-            if rev.get("feedback") else ""
+        owner, asked = self._change_request(brief)
         brief_view = {k: v for k, v in brief.items() if k not in ("creator_plan", "revision", "revisions_done", "market")}
         user = (f"{mock_hint}\n\nBrief:\n{json.dumps(brief_view, indent=2)}\n\n"
                 f"Market context: price range {market.get('price_range') or 'unknown'}; "
@@ -141,8 +139,16 @@ class QAAgent(Agent):
 
         missing = [k for k in COMMERCIAL_KEYS if k not in scores]
         lows = [k for k, v in scores.items() if low(k, v)]
-        passed = bool(verdict.get("pass")) and not verdict.get("ip_concerns") and not lows and not missing
+        checked = [c for c in verdict.get("requested_changes") or [] if isinstance(c, dict)]
+        not_done = [str(c.get("change")) for c in checked if not c.get("done")]
+        unchecked = asked and not checked
+        passed = (bool(verdict.get("pass")) and not verdict.get("ip_concerns") and not lows and not missing
+                  and not not_done and not unchecked)
         reasons.extend(verdict.get("reasons", []))
+        if not_done:
+            reasons.append("requested changes not made: " + "; ".join(not_done))
+        if unchecked:
+            reasons.append("QA did not confirm the requested changes were made; rejecting on doubt")
         if verdict.get("ip_concerns"):
             reasons.append(f"ip concerns: {verdict['ip_concerns']}")
         if lows:
@@ -152,9 +158,40 @@ class QAAgent(Agent):
             reasons.append(f"QA did not score {', '.join(missing)}; rejecting on doubt")
         return {"pass": passed, "scores": scores, "reasons": reasons, "ip_concerns": verdict.get("ip_concerns", []),
                 "verdict": verdict.get("verdict"), "improvements": verdict.get("improvements", []),
+                "requested_changes": checked,
                 "reviewed": {"listing_images": len(listing), "file_images": len(files), "file": file_note},
                 "file_check": file_check,
                 "checks": {"blocklist": "ok", "duplicate": "ok", "file": "ok", "vision": "ok" if passed else "fail"}}
+
+    @staticmethod
+    def _change_request(brief: dict) -> tuple[str, list[str]]:
+        """The most recent owner revision or Editor polish, as text for the prompt and as a checklist.
+        QA must confirm each item was actually made in the files it is looking at."""
+        from pipeline.agents.editor import requested_changes
+
+        pending_rev = brief.get("revision")
+        last_rev = (brief.get("revisions_done") or [{}])[-1]
+        last_edit = (brief.get("edits_done") or [{}])[-1]
+        if pending_rev:
+            rev, edit = pending_rev, {}
+        elif int(last_edit.get("completed_run") or 0) > int(last_rev.get("completed_run") or 0):
+            rev, edit = {}, last_edit
+        else:
+            rev, edit = last_rev, {}
+        if rev.get("feedback"):
+            items = [ln.lstrip("- ").strip() for ln in str(rev["feedback"]).splitlines() if ln.strip()]
+            text = ("\n\nThe shop owner asked the Creator to rebuild this with these changes. REQUESTED CHANGES "
+                    "(confirm each one in the files):\n" + "\n".join(f"- {i}" for i in items))
+            return text, items
+        if edit and not edit.get("failed"):
+            items = requested_changes(edit)
+            prev = edit.get("previous_qa") or {}
+            text = ("\n\nThis is a POLISHED version by the Editor. REQUESTED CHANGES (confirm each one in the files; "
+                    "an ignored request fails the product):\n" + ("\n".join(f"- {i}" for i in items) or "- (none; general polish)")
+                    + (f"\nPrevious version's scores: {json.dumps(prev.get('scores'))}. The polish should score at least as high."
+                       if prev.get("scores") else ""))
+            return text, items
+        return "", []
 
     def _inspect_files(self, product: Product, storage) -> tuple[dict | None, list[bytes], str]:
         """Validate the delivered file and render it to images (what the buyer will open)."""

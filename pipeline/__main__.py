@@ -1,7 +1,7 @@
 """CLI entry point.
 
-  python -m pipeline run <researcher|creator|qa|lister|analyst|daily>
-  python -m pipeline run-all            # researcher -> creator -> qa -> lister -> analyst
+  python -m pipeline run <researcher|creator|editor|qa|lister|analyst|fulfiller|daily>
+  python -m pipeline run-all            # researcher -> creator -> editor -> qa -> lister -> analyst -> fulfiller
   python -m pipeline status
   python -m pipeline smoke
   python -m pipeline web                # village dashboard, /health, /status, Etsy OAuth callback
@@ -126,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("agent")
     r.set_defaults(fn=cmd_run)
 
-    ra = sub.add_parser("run-all", help="run all five agents in order")
+    ra = sub.add_parser("run-all", help="run every agent once, in pipeline order")
     ra.set_defaults(fn=cmd_run_all)
 
     st = sub.add_parser("status", help="counts by state, recent runs, spend")

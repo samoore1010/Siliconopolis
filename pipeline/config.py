@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     model_research: str = Field("claude-opus-5-5", alias="MODEL_RESEARCH")
     model_worker: str = Field("claude-sonnet-5-5", alias="MODEL_WORKER")
     model_cheap: str = Field("claude-haiku-5-5", alias="MODEL_CHEAP")
+    # the Editor polishes existing products with a stronger model than the Creator
+    model_editor: str = Field("claude-opus-5-5", alias="MODEL_EDITOR")
+    # an edit that costs more than this (LLM + images, this product, this run) is abandoned, not retried
+    editor_max_cost_per_product_usd: float = Field(3.0, alias="EDITOR_MAX_COST_PER_PRODUCT_USD")
     llm_provider: Literal["", "anthropic", "mock"] = Field("", alias="LLM_PROVIDER")
     # USD per million tokens, "model_prefix=input/output;..." (owner may tune).
     # TODO(owner): confirm current list prices at https://www.anthropic.com/pricing

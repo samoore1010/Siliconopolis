@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -20,16 +20,11 @@ from pipeline.db.events import EventKind, record_event
 from pipeline.db.models import FulfillmentOrder, OrderStatus, Product
 from pipeline.fulfillment import ledger, personalization_fields, render_order, validate_values
 from pipeline.storage import get_storage
-from pipeline.web.auth import require_printer
+from pipeline.web.auth import require_printer, require_write
 from pipeline.web.village_state import _aware
 
 router = APIRouter(prefix="/api/print")
 CARRIERS = ("usps", "ups", "fedex", "dhl", "other")
-
-
-def require_write(x_siliconopolis: str | None = Header(None)) -> None:
-    if x_siliconopolis != "1":
-        raise HTTPException(403, "missing X-Siliconopolis header")
 
 
 class StatusIn(BaseModel):

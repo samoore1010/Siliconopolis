@@ -27,15 +27,16 @@ class AgentState:
 
 
 # schedule interval per agent (for the "sleeping" rule: > 1.5x interval without a run)
-SCHEDULE_HOURS = {"researcher": 24 * 7, "creator": 24, "qa": 24, "lister": 24, "analyst": 24 * 7, "fulfiller": 1}
-INPUT_STATE = {"researcher": None, "creator": ProductState.BRIEF, "qa": ProductState.CREATED,
+SCHEDULE_HOURS = {"researcher": 24 * 7, "creator": 24, "editor": 1, "qa": 24, "lister": 24, "analyst": 24 * 7, "fulfiller": 1}
+INPUT_STATE = {"researcher": None, "creator": ProductState.BRIEF, "editor": ProductState.EDITING, "qa": ProductState.CREATED,
                "lister": ProductState.APPROVED, "analyst": ProductState.DRAFTED, "fulfiller": None}
 # which Railway cron service runs each agent (for the optional Run-now button)
-SERVICE_FOR_AGENT = {"researcher": "researcher", "creator": "daily", "qa": "daily", "lister": "daily", "analyst": "analyst",
-                     "fulfiller": "fulfiller"}
+SERVICE_FOR_AGENT = {"researcher": "researcher", "creator": "daily", "editor": "editor", "qa": "daily", "lister": "daily",
+                     "analyst": "analyst", "fulfiller": "fulfiller"}
 AGENT_META = {
     "researcher": {"title": "Researcher", "role": "finds what sells and proposes product ideas", "schedule": "weekly, Mon 6:00 AM Phoenix"},
     "creator": {"title": "Creator", "role": "designs the product files and listing photos", "schedule": "daily, 7:00 AM Phoenix"},
+    "editor": {"title": "Editor", "role": "polishes products you send it, with a stronger model", "schedule": "hourly, only when you send it something"},
     "qa": {"title": "QA", "role": "checks quality, copyright and whether it would sell", "schedule": "daily, after Creator"},
     "lister": {"title": "Lister", "role": "writes the Etsy listing and saves it as a draft", "schedule": "daily, after QA"},
     "analyst": {"title": "Analyst", "role": "reads sales and tells the Researcher what works", "schedule": "weekly, Sun 8:00 PM Phoenix"},
@@ -85,6 +86,8 @@ def derive_agent_state(
     if agent == "lister" and awaiting_human:
         return AgentState.WAITING_HUMAN, f"{awaiting_human} draft(s) waiting for your review on Etsy"
     limit = timedelta(hours=SCHEDULE_HOURS.get(agent, 24) * 1.5)
+    if agent == "editor" and input_count == 0:
+        return AgentState.IDLE, "nothing to polish; send it a product from the Products page"
     if (last_run_at is None or now - last_run_at > limit) and input_count == 0:
         return AgentState.SLEEPING, "nothing queued and no recent run"
     return AgentState.IDLE, "waiting for the next scheduled run"

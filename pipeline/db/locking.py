@@ -70,15 +70,17 @@ def release(session: Session, product: Product) -> None:
     product.locked_at = None
 
 
-def transition(session: Session, product: Product, new_state: str, message: str = "") -> None:
-    """Move to a new state, release the lock and log an event (keeps transitions auditable)."""
+def transition(session: Session, product: Product, new_state: str, message: str = "",
+               agent: str | None = None) -> None:
+    """Move to a new state, release the lock and log an event (keeps transitions auditable).
+    `agent` defaults to the running agent; the web app passes "owner" for the owner's own actions."""
     from pipeline.db.events import EventKind, record_event
 
     old_state = product.state
     product.state = new_state
     release(session, product)
     title = _product_title(product)
-    record_event(session, kind=EventKind.TRANSITION, product_id=product.id, from_state=old_state,
+    record_event(session, kind=EventKind.TRANSITION, agent=agent, product_id=product.id, from_state=old_state,
                  to_state=new_state, message=message or f"{title}: {old_state} -> {new_state}")
 
 
