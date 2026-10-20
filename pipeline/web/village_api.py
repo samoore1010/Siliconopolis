@@ -14,6 +14,7 @@ from sqlalchemy import select
 from pipeline.agents import AGENT_NAMES, prompt_file_for
 from pipeline.config import get_settings
 from pipeline.db import session_scope
+from pipeline.db.events import EventKind, record_event
 from pipeline.db.models import Event, Product, ProductState, Run
 from pipeline.logging_setup import get_logger
 from pipeline.storage import get_storage
@@ -124,13 +125,22 @@ def village_rejects():
 
 @router.post("/run/{agent}", dependencies=[Depends(require_write)])
 def village_run_now(agent: str):
-    """Trigger the Railway cron service for an agent. Read-only w.r.t. Etsy: it only starts a normal run,
-    which enforces caps, locking and draft-only exactly like a scheduled run."""
+    """Start a normal run of an agent now. With the in-app worker (the default) this queues a job the
+    worker picks up within seconds; otherwise it re-runs the agent's Railway cron service. Either way
+    caps, locking and draft-only apply exactly like a scheduled run."""
+    from pipeline.worker import request_run
+
     settings = get_settings()
     if agent not in AGENT_NAMES:
         raise HTTPException(404, "unknown agent")
-    if not settings.run_now_enabled:
-        raise HTTPException(403, "Run now is disabled: set RAILWAY_API_TOKEN and RAILWAY_SERVICE_IDS on the web service.")
+    if settings.worker_enabled:
+        with session_scope() as s:
+            job = request_run(s, agent)
+            record_event(s, kind=EventKind.INFO, agent="owner", message=f"You asked the {AGENT_META[agent]['title']} to run now")
+            return {"ok": True, "agent": agent, "job_id": job.id, "via": "worker"}
+    if not settings.railway_run_now_enabled:
+        raise HTTPException(403, "Run now is disabled: enable the in-app worker (WORKER_ENABLED=true) or set "
+                                 "RAILWAY_API_TOKEN and RAILWAY_SERVICE_IDS on the web service.")
     try:
         service_ids = json.loads(settings.railway_service_ids)
     except json.JSONDecodeError:
@@ -150,4 +160,4 @@ def village_run_now(agent: str):
         log.error("run-now failed", agent=agent, status=resp.status_code, errors=body.get("errors"))
         raise HTTPException(502, f"Railway API error: {body.get('errors') or resp.status_code}")
     log.info("run-now triggered", agent=agent, service=service_key)
-    return {"ok": True, "agent": agent, "service": service_key}
+    return {"ok": True, "agent": agent, "service": service_key, "via": "railway"}

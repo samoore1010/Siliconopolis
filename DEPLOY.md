@@ -6,12 +6,13 @@ One Railway project, two environments (`staging`, `production`). Each environmen
 |---|---|---|
 | `postgres` | Railway Postgres | queue, state, runs, OAuth tokens |
 | `storage` | Railway Bucket (S3-compatible) | product files + listing images |
-| `web` | web service | image default (`python -m pipeline migrate && python -m pipeline web`); IaC also sets **pre-deploy** `alembic upgrade head` |
-| `researcher` | cron | `python -m pipeline run researcher` — `0 13 * * 1` (Mon 6:00 AM Phoenix) |
-| `daily-pipeline` | cron | `python -m pipeline run daily` — `0 14 * * *` (7:00 AM Phoenix) |
-| `analyst` | cron | `python -m pipeline run analyst` — `0 3 * * 1` (Sun 8:00 PM Phoenix) |
-| `fulfiller` | cron | `python -m pipeline run fulfiller` — `0 * * * *` (hourly: shirt/mug orders → print queue, tracking → Etsy) |
-| `editor` | cron | `python -m pipeline run editor` — `30 * * * *` (hourly: polishes the products you sent to the Editor; exits at once when there are none) |
+| `web` | web service | image default (`python -m pipeline migrate && python -m pipeline web`): the dashboard **and the agents**. The in-app worker (`pipeline/worker.py`, `WORKER_ENABLED=true`) runs QA, the Editor and the Lister within seconds of work reaching their queue, keeps the Researcher (Mon 6:00 AM Phoenix), Creator (daily 7:00 AM), Analyst (Sun 8:00 PM) and Fulfiller (hourly) on schedule, and serves every "Run now" button. |
+
+That is the whole deployment. Cron services are **optional**: `.railway/railway.ts` only creates them
+with `OPTIONAL_CRONS=1`, and if you already have `researcher` / `daily-pipeline` / `editor` /
+`analyst` services you can delete them (or keep them: their runs are harmless duplicates, since row
+locks mean whichever process claims a product first does the work). The web service needs enough
+memory for Chromium and LibreOffice renders (1-2 GB is comfortable).
 
 All services build from the same `Dockerfile`; only the start command differs. Cron services run to
 completion and exit (nonzero on failure, `3` when a cap is hit) and close their DB pool on exit, as
@@ -178,10 +179,12 @@ Moving between stages is a variable change only; run `python -m pipeline smoke` 
   (120) are reclaimed automatically. `status` shows `locked rows`.
 - **Rollback**: redeploy a previous deployment; migrations are additive (downgrade exists for 0001).
 
-## H. Optional "Run now" buttons
+## H. "Run now" buttons
 
-Each agent panel has a Run-now button that asks Railway to re-run the agent's cron service. It is
-disabled until the `web` service has:
+Every agent has a Run-now button (Team page, agent panel, build/polish queues, Research). With the
+in-app worker it queues a `job_requests` row the worker picks up on its next poll (15 s), no token
+needed. Only when `WORKER_ENABLED=false` does it fall back to asking Railway to re-run a cron
+service, which then needs:
 
 - `RAILWAY_API_TOKEN` — a Railway project or account token with access to this project.
 - `RAILWAY_SERVICE_IDS` — JSON mapping `{"researcher": "<serviceId>", "daily": "<serviceId>", "editor": "<serviceId>",

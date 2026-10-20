@@ -1,8 +1,8 @@
 /**
  * Railway Infrastructure as Code for the Etsy agent pipeline.
  *
- * One Railway project, two environments (staging, production). Every service is built from the
- * same Dockerfile and differs only by start command. Cron services run to completion and exit.
+ * One Railway project, two environments (staging, production). One web service runs the dashboard
+ * AND the agents (in-app worker); optional cron services are built from the same Dockerfile.
  *
  * Usage:
  *   npm install railway             # IaC SDK (see .railway/README.md)
@@ -73,9 +73,8 @@ export default defineRailway((ctx) => {
     // Village dashboard basic auth (required: the web URL is public).
     VILLAGE_USER: preserve(),
     VILLAGE_PASSWORD: preserve(),
-    // Optional Run-now buttons (see DEPLOY.md section H).
-    RAILWAY_API_TOKEN: preserve(),
-    RAILWAY_SERVICE_IDS: preserve(),
+    // The in-app worker (default on): the web service runs the agents itself.
+    WORKER_ENABLED: "true",
   };
 
   const source = github(REPO, { branch: BRANCH });
@@ -92,51 +91,23 @@ export default defineRailway((ctx) => {
     env,
   });
 
-  // Weekly research: Monday 13:00 UTC = Monday 6:00 AM Phoenix.
-  const researcher = service("researcher", {
-    source,
-    start: "python -m pipeline run researcher",
-    deploy: { cronSchedule: "0 13 * * 1", restartPolicyType: "NEVER" },
-    env,
-  });
-
-  // Daily: Creator -> QA -> Lister, 14:00 UTC = 7:00 AM Phoenix.
-  const daily = service("daily-pipeline", {
-    source,
-    start: "python -m pipeline run daily",
-    deploy: { cronSchedule: "0 14 * * *", restartPolicyType: "NEVER" },
-    env,
-  });
-
-  // Weekly analysis: Monday 03:00 UTC = Sunday 8:00 PM Phoenix.
-  const analyst = service("analyst", {
-    source,
-    start: "python -m pipeline run analyst",
-    deploy: { cronSchedule: "0 3 * * 1", restartPolicyType: "NEVER" },
-    env,
-  });
-
-  // Hourly: turn new shirt/mug orders into print jobs and send tracking back to Etsy.
-  const fulfiller = service("fulfiller", {
-    source,
-    start: "python -m pipeline run fulfiller",
-    deploy: { cronSchedule: "0 * * * *", restartPolicyType: "NEVER" },
-    env,
-  });
-
-  // Hourly at :30: polish the products the owner sent to the Editor. Its own service, so a polish
-  // never waits behind the daily build; exits at once when the polish queue is empty.
-  const editor = service("editor", {
-    source,
-    start: "python -m pipeline run editor",
-    deploy: { cronSchedule: "30 * * * *", restartPolicyType: "NEVER" },
-    env,
-  });
+  // The web service also runs the agents (pipeline/worker.py): QA, the Editor and the Lister react
+  // to their queues within seconds, the Researcher/Creator/Analyst/Fulfiller keep their schedule, and
+  // "Run now" in the dashboard needs no Railway token. Separate cron services are therefore optional.
+  // Set OPTIONAL_CRONS=1 when applying if you still want them as a belt-and-braces backstop (their
+  // runs are harmless duplicates: whichever process claims a row first does the work).
+  const crons = process.env.OPTIONAL_CRONS
+    ? [
+        service("researcher", { source, start: "python -m pipeline run researcher", deploy: { cronSchedule: "0 13 * * 1", restartPolicyType: "NEVER" }, env }), // Mon 6:00 AM Phoenix
+        service("daily-pipeline", { source, start: "python -m pipeline run daily", deploy: { cronSchedule: "0 14 * * *", restartPolicyType: "NEVER" }, env }), // 7:00 AM Phoenix
+        service("editor", { source, start: "python -m pipeline run editor", deploy: { cronSchedule: "30 * * * *", restartPolicyType: "NEVER" }, env }),
+        service("analyst", { source, start: "python -m pipeline run analyst", deploy: { cronSchedule: "0 3 * * 1", restartPolicyType: "NEVER" }, env }), // Sun 8:00 PM Phoenix
+        service("fulfiller", { source, start: "python -m pipeline run fulfiller", deploy: { cronSchedule: "0 * * * *", restartPolicyType: "NEVER" }, env }),
+      ]
+    : [];
 
   const data = group("Data", [db, storage]);
-  const agents = group("Agents", [researcher, daily, editor, analyst, fulfiller]);
+  const resources = crons.length ? [data, web, group("Optional crons", crons)] : [data, web];
 
-  return project("etsy-agent-pipeline", {
-    resources: [data, web, agents],
-  });
+  return project("etsy-agent-pipeline", { resources });
 });

@@ -14,6 +14,7 @@ from pipeline.config import Settings
 from pipeline.db.locking import _product_title
 from pipeline.db.models import Event, Product, ProductState, Run, RunStatus
 from pipeline.guardrails.caps import briefs_this_week, drafts_today, todays_spend
+from pipeline.schedule import INPUT_STATE, REACTIVE_AGENTS  # noqa: F401 - INPUT_STATE is re-exported
 
 
 class AgentState:
@@ -28,8 +29,6 @@ class AgentState:
 
 # schedule interval per agent (for the "sleeping" rule: > 1.5x interval without a run)
 SCHEDULE_HOURS = {"researcher": 24 * 7, "creator": 24, "editor": 1, "qa": 24, "lister": 24, "analyst": 24 * 7, "fulfiller": 1}
-INPUT_STATE = {"researcher": None, "creator": ProductState.BRIEF, "editor": ProductState.EDITING, "qa": ProductState.CREATED,
-               "lister": ProductState.APPROVED, "analyst": ProductState.DRAFTED, "fulfiller": None}
 # which Railway cron service runs each agent (for the optional Run-now button)
 SERVICE_FOR_AGENT = {"researcher": "researcher", "creator": "daily", "editor": "editor", "qa": "daily", "lister": "daily",
                      "analyst": "analyst", "fulfiller": "fulfiller"}
@@ -88,6 +87,8 @@ def derive_agent_state(
     limit = timedelta(hours=SCHEDULE_HOURS.get(agent, 24) * 1.5)
     if agent == "editor" and input_count == 0:
         return AgentState.IDLE, "nothing to polish; send it a product from the Products page"
+    if agent in REACTIVE_AGENTS:
+        return AgentState.IDLE, "starts as soon as something reaches its queue"
     if (last_run_at is None or now - last_run_at > limit) and input_count == 0:
         return AgentState.SLEEPING, "nothing queued and no recent run"
     return AgentState.IDLE, "waiting for the next scheduled run"
@@ -160,7 +161,16 @@ def collect_village_state(session: Session, settings: Settings) -> dict[str, Any
         "stale_locks": sum(a["stale_locks"] for a in agents),
         "last_event_id": int(last_event_id),
         "run_now_enabled": settings.run_now_enabled,
+        "worker": worker_info(),
     }
+
+
+def worker_info() -> dict[str, Any]:
+    from dataclasses import asdict
+
+    from pipeline.worker import worker_status
+
+    return asdict(worker_status())
 
 
 def serialize_event(e: Event) -> dict[str, Any]:

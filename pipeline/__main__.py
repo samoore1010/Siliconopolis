@@ -4,7 +4,8 @@
   python -m pipeline run-all            # researcher -> creator -> editor -> qa -> lister -> analyst -> fulfiller
   python -m pipeline status
   python -m pipeline smoke
-  python -m pipeline web                # village dashboard, /health, /status, Etsy OAuth callback
+  python -m pipeline web                # dashboard + the in-app worker that runs the agents (WORKER_ENABLED)
+  python -m pipeline worker             # the same worker loop as a separate always-on process
   python -m pipeline demo               # mock-mode loop to watch the village animate
 
 Exit codes: 0 ok, 1 failure, 3 cap reached (so Railway cron shows failure/red when something is off).
@@ -106,6 +107,12 @@ def cmd_demo(args) -> int:
         return 2
 
 
+def cmd_worker(args) -> int:
+    from pipeline.worker import run_standalone
+
+    return run_standalone()
+
+
 def cmd_migrate(args) -> int:
     from alembic.config import Config
 
@@ -146,6 +153,9 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--sleep", type=float, default=4.0, help="seconds between agent runs")
     d.add_argument("--reset", action="store_true", help="wipe products/runs/events first")
     d.set_defaults(fn=cmd_demo)
+
+    wk = sub.add_parser("worker", help="run the agent worker loop (reacts to queues, keeps the schedule, honours Run now)")
+    wk.set_defaults(fn=cmd_worker)
 
     m = sub.add_parser("migrate", help="alembic upgrade head")
     m.set_defaults(fn=cmd_migrate)

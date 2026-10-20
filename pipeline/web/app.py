@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Query, Request
@@ -30,7 +31,19 @@ log = get_logger("pipeline.web")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-app = FastAPI(title="Siliconopolis — Etsy Agent Pipeline", version=__version__)
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """The agents run from inside this process (see pipeline/worker.py) unless WORKER_ENABLED=false."""
+    from pipeline.worker import start_background_worker, stop_background_worker
+
+    start_background_worker()
+    try:
+        yield
+    finally:
+        stop_background_worker()
+
+
+app = FastAPI(title="Siliconopolis — Etsy Agent Pipeline", version=__version__, lifespan=lifespan)
 app.include_router(village_router)
 app.include_router(dashboard_router)
 app.include_router(print_router)

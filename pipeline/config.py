@@ -96,6 +96,12 @@ class Settings(BaseSettings):
     blocklist_file: str = Field("blocklist.txt", alias="BLOCKLIST_FILE")
     prompts_dir: str = Field("prompts", alias="PROMPTS_DIR")
 
+    # in-app worker: the web service runs the agents itself (reacting to queues, keeping the schedule,
+    # and honouring "Run now"), so no cron services or Railway API token are needed
+    worker_enabled: bool = Field(True, alias="WORKER_ENABLED")
+    worker_poll_seconds: int = Field(15, alias="WORKER_POLL_SECONDS")
+    worker_retry_minutes: int = Field(30, alias="WORKER_RETRY_MINUTES")
+
     # web / village
     port: int = Field(8000, alias="PORT")
     village_user: str = Field("", alias="VILLAGE_USER")
@@ -145,8 +151,13 @@ class Settings(BaseSettings):
         return bool(self.print_user and self.print_password)
 
     @property
-    def run_now_enabled(self) -> bool:
+    def railway_run_now_enabled(self) -> bool:
         return bool(self.railway_api_token and self.railway_service_ids)
+
+    @property
+    def run_now_enabled(self) -> bool:
+        """"Run now" works through the in-app worker, or (legacy) by re-running a Railway cron service."""
+        return self.worker_enabled or self.railway_run_now_enabled
 
     @property
     def is_sqlite(self) -> bool:

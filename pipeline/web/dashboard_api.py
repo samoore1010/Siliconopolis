@@ -29,6 +29,8 @@ from pipeline.db.models import (
     BriefStatus,
     Event,
     FulfillmentOrder,
+    JobRequest,
+    JobStatus,
     OrderStatus,
     OwnerNote,
     OwnerNoteKind,
@@ -45,7 +47,7 @@ from pipeline.guardrails.caps import briefs_this_week, drafts_today, todays_spen
 from pipeline.schedule import next_run
 from pipeline.storage import get_storage
 from pipeline.web.auth import require_viewer, require_write
-from pipeline.web.village_state import AGENT_META, _aware, product_summary
+from pipeline.web.village_state import AGENT_META, _aware, product_summary, worker_info
 
 router = APIRouter(prefix="/api/dashboard", dependencies=[Depends(require_viewer)])
 
@@ -256,6 +258,19 @@ def overview():
              "Being printed. Tracking goes to the buyer automatically when they ship.", "See orders", "orders")
     if settings.image_provider == "mock" and settings.app_env != "local":
         need("info", "Wall art is paused", "It needs an image provider (OpenAI) to be configured.", None, None)
+    worker = worker_info()
+    if not worker["enabled"]:
+        need("warn", "The in-app worker is off",
+             "Agents only run from Railway cron services and \"Run now\" needs a Railway token. Set WORKER_ENABLED=true "
+             "on the web service so QA, the Editor and the Lister react to their queues immediately.", None, None)
+    elif not worker["alive"]:
+        need("warn", "The in-app worker isn't running", f"{worker.get('error') or 'It has not started yet.'} "
+             "Redeploy the web service if this persists.", None, None)
+    with session_scope() as s:
+        queued_jobs = s.execute(select(JobRequest).where(JobRequest.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]))
+                                .order_by(JobRequest.id.asc())).scalars().all()
+        jobs = [{"id": j.id, "agent": j.agent, "label": AGENT_LABEL.get(j.agent, j.agent), "status": j.status,
+                 "requested_at": _aware(j.requested_at).isoformat()} for j in queued_jobs]
 
     now = datetime.now(UTC)
     with session_scope() as s:
@@ -269,6 +284,7 @@ def overview():
     stages = [{**st, "count": counts.get(st["state"], 0)} for st in STAGES]
     return {
         "working": working, "stages": stages, "needs_you": needs, "schedule": schedule, "briefs_queued": briefs_queued,
+        "worker": {**worker, "jobs": jobs}, "run_now_available": settings.run_now_enabled,
         "activity": activity, "last_runs": last_runs,
         "orders": {k: order_counts.get(k, 0) for k in OrderStatus.ALL},
         "spend": {"today": round(spent_today, 2), "week": round(spend_week, 2), "total": round(spend_total, 2),
@@ -774,6 +790,16 @@ def polish_next(product_id: int):
 @router.post("/queue/{product_id}/next", dependencies=[Depends(require_write)])
 def build_next(product_id: int):
     return _next("creator", product_id)
+
+
+@router.post("/agents/{agent}/run", dependencies=[Depends(require_write)])
+def run_agent_now(agent: str):
+    """Run an agent now (a normal run: caps, locks, draft-only all apply). Picked up by the in-app worker."""
+    from pipeline.web.village_api import village_run_now
+
+    if agent not in AGENT_LABEL:
+        raise HTTPException(404, "unknown agent")
+    return village_run_now(agent)
 
 
 @router.post("/agents/{agent}/stop", dependencies=[Depends(require_write)])

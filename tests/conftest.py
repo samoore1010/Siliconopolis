@@ -39,6 +39,7 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("STORAGE_DIR", str(tmp_path / "storage"))
     monkeypatch.setenv("LOG_FORMAT", "text")
+    monkeypatch.setenv("WORKER_ENABLED", "false")  # tests drive the agents themselves
     monkeypatch.setenv("DAILY_DRAFT_CAP", "10")
     monkeypatch.setenv("WEEKLY_BRIEF_CAP", "20")
     monkeypatch.setenv("MAX_DAILY_SPEND_USD", "10")
